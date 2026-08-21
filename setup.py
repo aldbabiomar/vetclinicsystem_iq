@@ -363,10 +363,10 @@ def enable_updates(data_dir=None, releases_dir=None):
 
     logs_src = os.path.join(BASE_DIR, "logs")
     logs_dst = os.path.join(data_dir, "logs")
+    os.makedirs(logs_dst, exist_ok=True)
     if os.path.isdir(logs_src):
         for name in os.listdir(logs_src):
             shutil.move(os.path.join(logs_src, name), os.path.join(logs_dst, name))
-    os.makedirs(logs_dst, exist_ok=True)
 
     uploads_src = os.path.join(BASE_DIR, "uploads")
     uploads_dst = os.path.join(data_dir, "attachments", "uploads")

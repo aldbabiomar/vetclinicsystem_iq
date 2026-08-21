@@ -14,7 +14,17 @@ from datetime import date, datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
-load_dotenv()
+# On the versioned-release layout (VETZONE_DATA_DIR set by the launcher
+# script — see updater.py / setup.py --enable-updates), .env lives in the
+# data dir, not next to this file, and code here runs from a release
+# folder whose working directory at launch isn't guaranteed. Falls back to
+# load_dotenv()'s normal upward search from cwd otherwise, unchanged from
+# before this option existed.
+_data_dir = os.environ.get("VETZONE_DATA_DIR")
+if _data_dir:
+    load_dotenv(os.path.join(_data_dir, ".env"))
+else:
+    load_dotenv()
 
 from flask import (
     Flask, render_template, request, redirect, url_for, flash, g, jsonify,
