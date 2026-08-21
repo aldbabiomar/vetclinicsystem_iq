@@ -264,6 +264,37 @@ def parse_int(raw, required=False):
         raise BadNumber(raw)
 
 
+def discount_percent_error(percent, cap):
+    """Range-checks an already-parsed discount percent against the current
+    user's role cap. Shared by visit/inpatient/POS discount-save routes so
+    the actual bound comparison lives in exactly one place — those three
+    routes are otherwise structurally similar but genuinely differ in
+    which table they update and how they look up "not discountable" line
+    items, so only this one piece (the part a future validation-rule
+    change would need to touch) is factored out. Returns an error string,
+    or None if percent is valid."""
+    if percent > cap or percent < 0:
+        return f"Discount must be between 0% and {cap}% for your role."
+    return None
+
+
+def stale_edit_error(old_updated_at, submitted_updated_at, what):
+    """Optimistic-locking guard for the "edit whole record" routes
+    (visit_edit, boarding_edit, inpatient_edit) — previously last-write-
+    wins with no warning: two staff editing the same record at once meant
+    the second save silently erased the first's changes. Compares the
+    updated_at the edit form was loaded with against the record's current
+    value; a mismatch means someone else saved in between. Returns an
+    error string, or None if it's safe to save. old_updated_at is None for
+    a row this mechanism has never touched (created before this existed,
+    or its very first edit), in which case there's nothing to compare
+    against and saving proceeds."""
+    if old_updated_at and submitted_updated_at != old_updated_at:
+        return (f"This {what} was changed by someone else while you had it open — "
+                f"reload the page to see the latest version before saving your changes.")
+    return None
+
+
 def has_negative(*values):
     """True if any of the given already-parsed numbers (None is fine —
     skipped, since an absent value isn't a negative one) is below zero.
@@ -764,8 +795,8 @@ def change_password():
         user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
         if not auth.verify_password(user["password_hash"], current):
             flash("Current password is incorrect.", "error")
-        elif len(new) < 6:
-            flash("New password must be at least 6 characters.", "error")
+        elif len(new) < 8:
+            flash("New password must be at least 8 characters.", "error")
         elif new != confirm:
             flash("New password and confirmation don't match.", "error")
         else:
@@ -835,8 +866,8 @@ def admin_user_new():
     if not username or not full_name or not role:
         flash("Fill in a username, full name, and role.", "error")
         return redirect(url_for("admin_users"))
-    if len(password) < 6:
-        flash("Password must be at least 6 characters.", "error")
+    if len(password) < 8:
+        flash("Password must be at least 8 characters.", "error")
         return redirect(url_for("admin_users"))
     if db.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
         flash("That username is already taken.", "error")
@@ -924,8 +955,8 @@ def admin_user_role(user_id):
 def admin_user_reset_password(user_id):
     db = get_db()
     new_pw = request.form.get("new_password", "")
-    if len(new_pw) < 6:
-        flash("Password must be at least 6 characters.", "error")
+    if len(new_pw) < 8:
+        flash("Password must be at least 8 characters.", "error")
         return redirect(url_for("admin_users"))
     db.execute("UPDATE users SET password_hash=?, must_change_password=true WHERE id=?",
                (auth.hash_password(new_pw), user_id))
@@ -1183,6 +1214,20 @@ def api_price_list_lookup():
     params = [*categories, f"%{q}%", f"%{q}%"]
     rows = db.execute(sql, params).fetchall()
     return jsonify([{"id": r["id"], "name": r["name"], "category": r["category"], "price": r["sale_price"]} for r in rows])
+
+
+@app.route("/api/sales/<int:sale_id>/refundable-items")
+@auth.permission_required("manage_refunds")
+def api_sale_refundable_items(sale_id):
+    sale, lines = logic.refundable_sale_items(get_db(), sale_id)
+    if not sale:
+        return jsonify({"error": "No sale with that ID."}), 404
+    return jsonify({
+        "sale_id": sale["id"], "sale_date": sale["sale_date"],
+        "lines": [{"sale_item_id": l["sale_item_id"], "item_id": l["item_id"], "name": l["name"],
+                   "unit_price": l["unit_price"], "quantity": l["quantity"], "remaining": l["remaining"]}
+                  for l in lines],
+    })
 
 
 @app.route("/api/browse-folder")
@@ -1686,6 +1731,10 @@ def visit_edit(visit_id):
         return redirect(url_for("visits_list"))
     if request.method == "POST":
         f = request.form
+        conflict = stale_edit_error(visit["updated_at"], f.get("expected_updated_at"), "visit")
+        if conflict:
+            flash(conflict, "error")
+            return redirect(url_for("visit_edit", visit_id=visit_id))
         wellness_needed = f.get("wellness_needed", "N")
         grooming_needed = f.get("grooming_needed", "N")
         grooming_services = ",".join(f.getlist("grooming_services")) if grooming_needed == "Y" else None
@@ -1736,8 +1785,8 @@ def visit_edit(visit_id):
                followup_reason=?, followup_date=?, followup_status=?, wellness_needed=?, wellness_type=?,
                wellness_next_dose_date=?, wellness_contacted=?, wellness_contact_method=?, grooming_needed=?,
                grooming_services=?, grooming_notes=?, grooming_admitted_items=?, grooming_status=?,
-               grooming_contacted=?, payment_status=? WHERE id=?""",
-            (*new_vals.values(), visit_id),
+               grooming_contacted=?, payment_status=?, updated_at=? WHERE id=?""",
+            (*new_vals.values(), datetime.now().isoformat(timespec="seconds"), visit_id),
         )
         auth.log_change(db, "visits", visit_id, "update", changes)
         db.commit()
@@ -1841,8 +1890,9 @@ def visit_discount_save(visit_id):
         flash("Discount must be a valid number.", "error")
         return redirect(url_for("visit_detail", visit_id=visit_id))
     cap = auth.discount_cap_for(db)
-    if percent > cap or percent < 0:
-        flash(f"Discount must be between 0% and {cap}% for your role.", "error")
+    error = discount_percent_error(percent, cap)
+    if error:
+        flash(error, "error")
         return redirect(url_for("visit_detail", visit_id=visit_id))
     if percent > 0:
         summary = logic.visit_billing_summary(db, visit_id)
@@ -3335,15 +3385,17 @@ def boarding_new():
     except BadDate as e:
         flash(str(e), "error")
         return redirect(url_for("boarding_page"))
-    if total is None:
+    total_is_auto = total is None
+    if total_is_auto:
         total = logic.boarding_suggested_total(price_per_day, entry_date, dismissal_date)
     special_needs = f.get("special_needs") == "on"
     cur = db.execute(
         "INSERT INTO boarding_sessions (patient_id, entry_date, dismissal_date, admitted_items, special_needs, "
-        "special_needs_notes, room, price_per_day, total, dismissed, created_by) VALUES (?,?,?,?,?,?,?,?,?,false,?) RETURNING id",
+        "special_needs_notes, room, price_per_day, total, total_is_auto, dismissed, created_by) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,false,?) RETURNING id",
         (patient_id, entry_date, dismissal_date, f.get("admitted_items"), special_needs,
          f.get("special_needs_notes") if special_needs else None, f.get("room"), price_per_day, total,
-         session.get("user_id")),
+         total_is_auto, session.get("user_id")),
     )
     boarding_id = cur.fetchone()["id"]
     logic.refresh_boarding_total(db, boarding_id)
@@ -3363,6 +3415,10 @@ def boarding_edit(boarding_id):
     if not old:
         flash("Boarding session not found.", "error")
         return redirect(url_for("boarding_page"))
+    conflict = stale_edit_error(old["updated_at"], f.get("expected_updated_at"), "boarding session")
+    if conflict:
+        flash(conflict, "error")
+        return redirect(url_for("boarding_page"))
     try:
         price_per_day = parse_money(f.get("price_per_day"))
         total = parse_money(f.get("total"))
@@ -3375,19 +3431,20 @@ def boarding_edit(boarding_id):
     except BadDate as e:
         flash(str(e), "error")
         return redirect(url_for("boarding_page"))
-    if total is None:
+    total_is_auto = total is None
+    if total_is_auto:
         total = logic.boarding_suggested_total(price_per_day, entry_date, dismissal_date)
     special_needs = f.get("special_needs") == "on"
     new_vals = {
         "entry_date": entry_date, "dismissal_date": dismissal_date, "admitted_items": f.get("admitted_items"),
         "special_needs": special_needs, "special_needs_notes": f.get("special_needs_notes") if special_needs else None,
-        "room": f.get("room"), "price_per_day": price_per_day, "total": total,
+        "room": f.get("room"), "price_per_day": price_per_day, "total": total, "total_is_auto": total_is_auto,
     }
     changes = auth.diff_dict(old, new_vals)
     db.execute(
         "UPDATE boarding_sessions SET entry_date=?, dismissal_date=?, admitted_items=?, special_needs=?, "
-        "special_needs_notes=?, room=?, price_per_day=?, total=? WHERE id=?",
-        (*new_vals.values(), boarding_id),
+        "special_needs_notes=?, room=?, price_per_day=?, total=?, total_is_auto=?, updated_at=? WHERE id=?",
+        (*new_vals.values(), datetime.now().isoformat(timespec="seconds"), boarding_id),
     )
     logic.refresh_boarding_total(db, boarding_id)
     old_month = logic.month_key(old["entry_date"])
@@ -3403,8 +3460,25 @@ def boarding_edit(boarding_id):
 @auth.permission_required("manage_boarding")
 def boarding_dismiss(boarding_id):
     db = get_db()
-    db.execute("UPDATE boarding_sessions SET dismissed=true, dismissal_date=COALESCE(dismissal_date, ?) WHERE id=?",
-               (date.today().isoformat(), boarding_id))
+    row = db.execute(
+        "SELECT price_per_day, entry_date, dismissal_date, total, total_is_auto FROM boarding_sessions WHERE id=?",
+        (boarding_id,),
+    ).fetchone()
+    if not row:
+        flash("Boarding session not found.", "error")
+        return redirect(url_for("boarding_page"))
+    dismissal_date = row["dismissal_date"] or date.today().isoformat()
+    final_total = row["total"]
+    if row["total_is_auto"] and row["price_per_day"]:
+        # Lock in the final night count now that the stay is actually
+        # over — while active, boarding_billing_summary() was recomputing
+        # this live; once dismissed, nothing recomputes it anymore, so
+        # `total` needs to hold the real final figure, not whatever
+        # (usually 1 night) it was left at when the session was created.
+        final_total = logic.boarding_suggested_total(row["price_per_day"], row["entry_date"], dismissal_date)
+    db.execute("UPDATE boarding_sessions SET dismissed=true, dismissal_date=?, total=? WHERE id=?",
+               (dismissal_date, final_total, boarding_id))
+    logic.refresh_boarding_total(db, boarding_id)
     auth.log_change(db, "boarding_sessions", str(boarding_id), "update", {"dismissed": (False, True)})
     db.commit()
     flash("Marked as picked up.", "success")
@@ -3487,8 +3561,9 @@ def pos_checkout():
         flash("Discount must be a valid number.", "error")
         return redirect(url_for("pos_page"))
     cap = auth.discount_cap_for(db)
-    if discount_percent > cap or discount_percent < 0:
-        flash(f"Discount must be between 0% and {cap}% for your role.", "error")
+    error = discount_percent_error(discount_percent, cap)
+    if error:
+        flash(error, "error")
         return redirect(url_for("pos_page"))
     if not item_ids:
         flash("Cart is empty.", "error")
@@ -3727,6 +3802,10 @@ def inpatient_edit(case_id):
     db = get_db()
     f = request.form
     old = db.execute("SELECT * FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
+    conflict = stale_edit_error(old["updated_at"] if old else None, f.get("expected_updated_at"), "inpatient case")
+    if conflict:
+        flash(conflict, "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
     dismissed = f.get("dismissed") == "on"
     try:
         edited_dismissal_date = clean_date(f.get("dismissal_date"), field="dismissal_date") if dismissed else None
@@ -3748,7 +3827,8 @@ def inpatient_edit(case_id):
     changes = auth.diff_dict(old, new_vals)
     db.execute(
         "UPDATE inpatient_cases SET complaint=?, exam_findings=?, weight_kg=?, bcs=?, admitted_items=?, dismissed=?, dismissal_date=?, "
-        "attending_vet_id=?, supervising_vet_id=? WHERE id=?", (*new_vals.values(), case_id),
+        "attending_vet_id=?, supervising_vet_id=?, updated_at=? WHERE id=?",
+        (*new_vals.values(), datetime.now().isoformat(timespec="seconds"), case_id),
     )
     auth.log_change(db, "inpatient_cases", str(case_id), "update", changes)
     db.commit()
@@ -3873,8 +3953,9 @@ def inpatient_discount_save(case_id):
         flash("Discount must be a valid number.", "error")
         return redirect(url_for("inpatient_detail", case_id=case_id))
     cap = auth.discount_cap_for(db)
-    if percent > cap or percent < 0:
-        flash(f"Discount must be between 0% and {cap}% for your role.", "error")
+    error = discount_percent_error(percent, cap)
+    if error:
+        flash(error, "error")
         return redirect(url_for("inpatient_detail", case_id=case_id))
     if percent > 0:
         price_ids = [r["price_id"] for r in db.execute(
@@ -4216,7 +4297,12 @@ def refunds_page():
 def refund_retail_save():
     db = get_db()
     f = request.form
-    item_ids = f.getlist("item_id")
+    try:
+        sale_id = int(f.get("sale_id", ""))
+    except (TypeError, ValueError):
+        flash("Look up a sale first — a retail refund must be linked to the sale it's refunding.", "error")
+        return redirect(url_for("refunds_page"))
+    sale_item_ids_raw = f.getlist("sale_item_id")
     quantities = f.getlist("quantity")
     restock = f.get("restock") == "on"
     reason = (f.get("reason") or "").strip()
@@ -4226,27 +4312,52 @@ def refund_retail_save():
         flash(str(e), "error")
         return redirect(url_for("refunds_page"))
 
-    if not item_ids:
-        flash("No items scanned — nothing to refund.", "error")
+    if not sale_item_ids_raw:
+        flash("No items selected — nothing to refund.", "error")
+        return redirect(url_for("refunds_page"))
+    try:
+        sale_item_ids = [int(sid) for sid in sale_item_ids_raw]
+    except ValueError:
+        flash("Invalid item selection.", "error")
         return redirect(url_for("refunds_page"))
 
+    # Lock every sale_items row being refunded, in a fixed order, before
+    # computing how much of each is still refundable — same reasoning as
+    # pos_checkout()'s stock-row locking: without this, two concurrent
+    # refunds against the same sale could each read "2 remaining" and both
+    # submit, over-refunding a sale that only had 2 to give back.
+    for sid in sorted(set(sale_item_ids)):
+        db.execute("SELECT id FROM sale_items WHERE id=? AND sale_id=? FOR UPDATE", (sid, sale_id))
+
+    sale, refundable = logic.refundable_sale_items(db, sale_id)
+    if not sale:
+        flash("Sale not found.", "error")
+        return redirect(url_for("refunds_page"))
+    remaining_by_id = {l["sale_item_id"]: l for l in refundable}
+
     lines, total = [], 0
-    for iid, qty in zip(item_ids, quantities):
+    for sid, qty_raw in zip(sale_item_ids, quantities):
         try:
-            qty = parse_money(qty, required=True)
+            qty = parse_money(qty_raw, required=True)
         except BadNumber:
             flash("Refund quantities must be valid numbers.", "error")
             return redirect(url_for("refunds_page"))
         if qty <= 0:
             continue
-        price = logic.item_sale_price(db, iid)
-        if price is None:
-            item_row = db.execute("SELECT name FROM inventory_list WHERE id=?", (iid,)).fetchone()
-            flash(f"{item_row['name'] if item_row else iid} has no sale price set in the Price List — skipped.", "error")
-            continue
+        # Priced from what this sale actually charged (sale_items.unit_price,
+        # a snapshot taken at checkout) — never re-looked-up against
+        # today's Price List, which may have changed since the sale.
+        line = remaining_by_id.get(sid)
+        if not line:
+            flash("One of the selected items isn't part of that sale.", "error")
+            return redirect(url_for("refunds_page"))
+        if qty > line["remaining"] + 1e-9:
+            flash(f"Can't refund {qty:g} {line['name']} — only {line['remaining']:g} left refundable from this sale.", "error")
+            return redirect(url_for("refunds_page"))
+        price = line["unit_price"]
         line_total = round(price * qty, 2)
         total += line_total
-        lines.append((iid, qty, price, line_total))
+        lines.append((line["item_id"], sid, qty, price, line_total))
 
     if not lines:
         flash("Nothing to refund.", "error")
@@ -4254,16 +4365,17 @@ def refund_retail_save():
 
     now = datetime.now().isoformat(timespec="seconds")
     cur = db.execute(
-        "INSERT INTO refunds (refund_type, refund_date, amount, restocked, reason, processed_by, created_at) "
-        "VALUES ('retail',?,?,?,?,?,?) RETURNING id",
-        (refund_date, money.round_to_denomination(total), restock, reason, session["user_id"], now),
+        "INSERT INTO refunds (refund_type, refund_date, amount, restocked, sale_id, reason, processed_by, created_at) "
+        "VALUES ('retail',?,?,?,?,?,?,?) RETURNING id",
+        (refund_date, money.round_to_denomination(total), restock, sale_id, reason, session["user_id"], now),
     )
     refund_id = cur.fetchone()["id"]
 
-    for iid, qty, price, line_total in lines:
+    for iid, sid, qty, price, line_total in lines:
         db.execute(
-            "INSERT INTO refund_items (refund_id, item_id, quantity, unit_price, line_total) VALUES (?,?,?,?,?)",
-            (refund_id, iid, qty, price, line_total),
+            "INSERT INTO refund_items (refund_id, item_id, quantity, unit_price, line_total, sale_item_id) "
+            "VALUES (?,?,?,?,?,?)",
+            (refund_id, iid, qty, price, line_total, sid),
         )
         if restock:
             db.execute(

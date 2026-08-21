@@ -511,8 +511,24 @@ def boarding_suggested_total(price_per_day, entry_date, dismissal_date):
 
 
 def boarding_billing_summary(db, boarding_id):
-    b = db.execute("SELECT total FROM boarding_sessions WHERE id=?", (boarding_id,)).fetchone()
-    subtotal = (b["total"] or 0) if b else 0
+    b = db.execute(
+        "SELECT total, total_is_auto, price_per_day, entry_date, dismissal_date, dismissed "
+        "FROM boarding_sessions WHERE id=?", (boarding_id,)
+    ).fetchone()
+    if not b:
+        subtotal = 0
+    elif b["total_is_auto"] and not b["dismissed"] and b["price_per_day"]:
+        # Still an active stay, and `total` has never been overridden with
+        # a deliberately-typed figure — the stored value is only ever the
+        # suggestion computed once, back when the stay was created/last
+        # edited (usually 1 night, since dismissal_date is normally still
+        # unknown then). Recompute live from price_per_day x nights-so-far
+        # so the bill never sits frozen at a stale night count while the
+        # animal is still boarding. Once dismissed, boarding_dismiss()
+        # locks in the final figure and this branch no longer applies.
+        subtotal = boarding_suggested_total(b["price_per_day"], b["entry_date"], b["dismissal_date"]) or 0
+    else:
+        subtotal = b["total"] or 0
     paid_row = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE boarding_id=?", (boarding_id,)).fetchone()
     total, paid, balance, status = compute_bill_totals(subtotal, 0, paid_row["s"])
     return {"total": total, "paid": paid, "balance": balance, "status": status}
@@ -1154,10 +1170,28 @@ def yearly_pl(db):
 # ---------------------------------------------------------------------------
 REVENUE_CATEGORIES = ["Service", "Medicine", "Retail", "Boarding"]
 
-# Baghdad's work week is Sunday-Thursday (Friday/Saturday is the weekend).
-# Postgres EXTRACT(DOW) already returns 0=Sunday..6=Saturday, i.e. this order.
+# Postgres EXTRACT(DOW) returns 0=Sunday..6=Saturday, i.e. this order.
 WEEKDAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-WEEKDAY_IS_WEEKEND = [False, False, False, False, False, True, True]
+# Default matches Baghdad's work week (Sunday-Thursday, so Friday/Saturday
+# is the weekend) — overridable per-deployment via the settings.weekend_days
+# row (comma-separated 0-6 indices, same numbering as EXTRACT(DOW) above)
+# for a clinic running this app outside Iraq. See weekday_is_weekend().
+DEFAULT_WEEKEND_DAYS = {5, 6}
+
+
+def weekday_is_weekend(db):
+    """Returns a 7-element bool list (index 0=Sunday..6=Saturday) — which
+    days count as "weekend" for the Insights scheduling-demand chart.
+    Reads settings.weekend_days if set, otherwise DEFAULT_WEEKEND_DAYS."""
+    raw = get_setting(db, "weekend_days")
+    if raw:
+        try:
+            weekend_set = {int(d) for d in raw.split(",") if d.strip() != ""}
+        except ValueError:
+            weekend_set = DEFAULT_WEEKEND_DAYS
+    else:
+        weekend_set = DEFAULT_WEEKEND_DAYS
+    return [dow in weekend_set for dow in range(7)]
 
 
 def month_list(months_back):
@@ -1361,10 +1395,11 @@ def client_value(db, limit=20):
 
 def appointment_weekday_load(db, months_back=12):
     """
-    Scheduling demand by day of week (Baghdad work week: Sun-Thu, with
-    Fri/Sat flagged as the weekend), plus a same-day visit count as a rough
-    fulfillment signal. NOTE: appointments aren't linked to visits by ID in
-    this schema (no visit_id on the appointments table), so "visits that
+    Scheduling demand by day of week (weekend days per weekday_is_weekend()
+    — defaults to Baghdad's Fri/Sat, overridable via settings.weekend_days),
+    plus a same-day visit count as a rough fulfillment signal. NOTE:
+    appointments aren't linked to visits by ID in this schema (no visit_id
+    on the appointments table), so "visits that
     day" is a date-level proxy for demand actually showing up — not a
     per-appointment no-show match. Framed as an approximation in the UI.
     """
@@ -1382,12 +1417,13 @@ def appointment_weekday_load(db, months_back=12):
     ).fetchall()
     appt_by_dow = {r["dow"]: r["c"] for r in appt_rows}
     visit_by_dow = {r["dow"]: r["c"] for r in visit_rows}
+    is_weekend = weekday_is_weekend(db)
     out = []
     for dow in range(7):
         appts = appt_by_dow.get(dow, 0)
         visits = visit_by_dow.get(dow, 0)
         out.append({
-            "day": WEEKDAY_LABELS[dow], "is_weekend": WEEKDAY_IS_WEEKEND[dow],
+            "day": WEEKDAY_LABELS[dow], "is_weekend": is_weekend[dow],
             "appointments": appts, "visits_same_weekday": visits,
             "fulfillment_ratio": round(visits / appts, 2) if appts else None,
         })
@@ -1513,6 +1549,35 @@ def cohort_retention_grid(db, max_offset=11):
 # ---------------------------------------------------------------------------
 # Refunds (Admin only)
 # ---------------------------------------------------------------------------
+def refundable_sale_items(db, sale_id):
+    """Returns (sale_row_or_None, [line dicts]) for a POS sale — each line
+    carries the ORIGINAL unit_price actually charged (not today's Price
+    List price) and `remaining` = quantity minus whatever's already been
+    refunded against that exact sale_items row across every prior refund.
+    This is what refund_retail_save() uses both to render the refund pick
+    list and, server-side, to enforce a refund can never exceed what was
+    actually sold — see refunds.sale_id / refund_items.sale_item_id."""
+    sale = db.execute("SELECT * FROM sales WHERE id=?", (sale_id,)).fetchone()
+    if not sale:
+        return None, []
+    rows = db.execute(
+        "SELECT si.id AS sale_item_id, si.item_id, il.name, si.quantity, si.unit_price, "
+        "COALESCE((SELECT SUM(ri.quantity) FROM refund_items ri WHERE ri.sale_item_id = si.id), 0) AS already_refunded "
+        "FROM sale_items si JOIN inventory_list il ON il.id = si.item_id "
+        "WHERE si.sale_id=? ORDER BY si.id",
+        (sale_id,),
+    ).fetchall()
+    lines = []
+    for r in rows:
+        remaining = round(r["quantity"] - r["already_refunded"], 6)
+        lines.append({
+            "sale_item_id": r["sale_item_id"], "item_id": r["item_id"], "name": r["name"],
+            "unit_price": r["unit_price"], "quantity": r["quantity"],
+            "already_refunded": r["already_refunded"], "remaining": max(remaining, 0),
+        })
+    return sale, lines
+
+
 def recent_refunds(db, limit=100, offset=0, date_filter=None):
     where = ""
     params = []

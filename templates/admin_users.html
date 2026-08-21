@@ -43,7 +43,7 @@
           <td>
             <form method="post" action="{{ url_for('admin_user_reset_password', user_id=u.id) }}" class="inline-form" style="display:flex; gap:6px;">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="text" name="new_password" placeholder="New Password" minlength="6" required style="width:140px;">
+              <input type="text" name="new_password" placeholder="New Password" minlength="8" required style="width:140px;">
               <button class="btn small secondary" type="submit">Reset</button>
             </form>
           </td>
@@ -138,7 +138,7 @@
       <div class="form-grid">
         <div class="field"><label>Full Name</label><input required name="full_name" placeholder="e.g. Jordan Lee"></div>
         <div class="field"><label>Username</label><input required name="username" placeholder="jlee"></div>
-        <div class="field"><label>Temporary Password</label><input required type="text" name="password" minlength="6" placeholder="min. 6 characters"></div>
+        <div class="field"><label>Temporary Password</label><input required type="text" name="password" minlength="8" placeholder="min. 8 characters"></div>
         <div class="field"><label>Role</label>
           <select name="role_id" required>
             {% for r in roles %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}

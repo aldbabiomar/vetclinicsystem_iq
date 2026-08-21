@@ -6,35 +6,39 @@
 <div class="panel-grid">
   <div class="card">
     <div class="section-title" style="margin-top:0;">Retail Refund</div>
-    <p class="small muted">Scan each returned product's barcode. Stock is only put back if you check "Return to stock".</p>
+    <p class="small muted">Look up the sale being refunded by its Sale ID (shown on the receipt), then choose which items and how many to refund — priced at what was actually charged, never today's price. Stock is only put back if you check "Return to stock".</p>
 
-    <div class="field" style="margin-bottom:14px;">
-      <label>Scan Barcode or Search Item Name</label>
-      <input type="text" id="refundSearch" autocomplete="off" placeholder="Scan Barcode or Type Item Name…">
+    <div style="display:flex; gap:8px; align-items:flex-end; margin-bottom:10px;">
+      <div class="field" style="flex:1; margin-bottom:0;"><label>Sale ID</label><input type="number" id="refundSaleIdInput" placeholder="e.g. 42"></div>
+      <button class="btn secondary" type="button" onclick="lookupRefundSale()">Find Sale</button>
     </div>
-    <div id="refundResults"></div>
+    <div id="refundSaleError" class="small" style="color:var(--danger); display:none; margin-bottom:10px;"></div>
 
-    <div id="refundCartLines" style="margin-top:10px;"><div class="empty-note" id="emptyRefundCart">No items yet.</div></div>
+    <div id="refundSaleLines" style="display:none;">
+      <div class="small muted" style="margin-bottom:6px;">Sale #<span id="refundSaleIdLabel"></span> — <span id="refundSaleDateLabel"></span></div>
+      <div id="refundLineList"></div>
 
-    <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line);">
-      <div class="detail-item"><div class="k">Refund Total</div><div class="v" id="refundCartTotal" style="font-size:20px; font-weight:700;">0 IQD</div></div>
+      <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line);">
+        <div class="detail-item"><div class="k">Refund Total</div><div class="v" id="refundCartTotal" style="font-size:20px; font-weight:700;">0 IQD</div></div>
 
-      <label class="checkbox-row small" style="margin:12px 0; font-weight:500; text-transform:none;">
-        <input type="checkbox" id="restockCheck" checked> Return item(s) to stock
-      </label>
+        <label class="checkbox-row small" style="margin:12px 0; font-weight:500; text-transform:none;">
+          <input type="checkbox" id="restockCheck" checked> Return item(s) to stock
+        </label>
 
-      <form method="post" action="{{ url_for('refund_retail_save') }}" id="retailRefundForm">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-grid">
-          <div class="field"><label>Refund Date</label><input type="date" name="refund_date" value="{{ today }}"></div>
-          <div class="field"><label>Reason (optional)</label><input type="text" name="reason" placeholder="e.g. wrong item, customer changed mind"></div>
-        </div>
-        <input type="hidden" name="restock" id="restockHidden">
-        <div id="refundFieldsHidden"></div>
-        <div class="form-actions">
-          <button class="btn" type="submit" onclick="return prepareRefundSubmit()">Process Retail Refund</button>
-        </div>
-      </form>
+        <form method="post" action="{{ url_for('refund_retail_save') }}" id="retailRefundForm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="sale_id" id="refundSaleIdHidden">
+          <div class="form-grid">
+            <div class="field"><label>Refund Date</label><input type="date" name="refund_date" value="{{ today }}"></div>
+            <div class="field"><label>Reason (optional)</label><input type="text" name="reason" placeholder="e.g. wrong item, customer changed mind"></div>
+          </div>
+          <input type="hidden" name="restock" id="restockHidden">
+          <div id="refundFieldsHidden"></div>
+          <div class="form-actions">
+            <button class="btn" type="submit" onclick="return prepareRefundSubmit()">Process Retail Refund</button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 
@@ -85,6 +89,7 @@
       </td>
       <td class="small">
         {% if r.refund_type == 'retail' %}
+          {% if r.sale_id %}<a href="{{ url_for('pos_receipt', sale_id=r.sale_id) }}">Sale #{{ r.sale_id }}</a> — {% endif %}
           {% for it in r.refund_lines %}{{ it.name }} × {{ it.quantity|int }}{{ ", " if not loop.last }}{% endfor %}
         {% else %}
           {% if r.visit_id %}Visit {{ r.visit_id }}{% endif %}
@@ -105,79 +110,78 @@
 </div>
 
 <script>
-let refundCart = []; // {id, name, price, qty}
+let refundSale = null; // {sale_id, sale_date, lines: [{sale_item_id, item_id, name, unit_price, quantity, remaining}]}
 
-const rSearchInput = document.getElementById('refundSearch');
-const rResultsDiv = document.getElementById('refundResults');
-let rDebounce;
+async function lookupRefundSale() {
+  const errEl = document.getElementById('refundSaleError');
+  const linesPanel = document.getElementById('refundSaleLines');
+  const saleId = document.getElementById('refundSaleIdInput').value.trim();
+  errEl.style.display = 'none';
+  linesPanel.style.display = 'none';
+  if (!saleId) { errEl.textContent = 'Enter a Sale ID.'; errEl.style.display = 'block'; return; }
+  try {
+    const res = await fetch(`/api/sales/${encodeURIComponent(saleId)}/refundable-items`);
+    const data = await res.json();
+    if (!res.ok) {
+      errEl.textContent = data.error || 'Could not find that sale.';
+      errEl.style.display = 'block';
+      return;
+    }
+    refundSale = data;
+    document.getElementById('refundSaleIdLabel').textContent = data.sale_id;
+    document.getElementById('refundSaleDateLabel').textContent = data.sale_date;
+    document.getElementById('refundSaleIdHidden').value = data.sale_id;
+    renderRefundLines();
+    linesPanel.style.display = '';
+  } catch (err) {
+    errEl.textContent = 'Could not reach the server.';
+    errEl.style.display = 'block';
+  }
+}
 
-rSearchInput.addEventListener('input', () => {
-  clearTimeout(rDebounce);
-  const q = rSearchInput.value.trim();
-  if (!q) { rResultsDiv.innerHTML = ''; return; }
-  rDebounce = setTimeout(() => {
-    fetch(`/api/inventory/lookup?barcode=${encodeURIComponent(q)}`)
-      .then(r => r.json())
-      .then(data => {
-        if (data && data.id) { addToRefundCart(data); rSearchInput.value = ''; rResultsDiv.innerHTML=''; return; }
-        fetch(`/api/inventory/lookup?q=${encodeURIComponent(q)}`)
-          .then(r => r.json())
-          .then(list => {
-            if (!list.length) { rResultsDiv.innerHTML = '<div class="empty-note">No matches.</div>'; return; }
-            window.__refundSearchResults = list;
-            rResultsDiv.innerHTML = list.map((i, idx) =>
-              `<div class="list-line" style="cursor:pointer;" data-idx="${idx}" onclick="addToRefundCart(window.__refundSearchResults[this.dataset.idx])">
-                 <div class="who">${escapeHtml(i.name)}</div><div class="meta">${i.price != null ? i.price + ' IQD' : 'no price set'}</div>
-               </div>`
-            ).join('');
-          })
-          .catch(() => { rResultsDiv.innerHTML = '<div class="empty-note">Could not search inventory; check server connection.</div>'; });
-      })
-      .catch(() => { rResultsDiv.innerHTML = '<div class="empty-note">Could not search inventory; check server connection.</div>'; });
-  }, 200);
-});
-
-function addToRefundCart(item) {
-  if (item.price == null) { window.VZToast.show(item.name + ' has no sale price set in the Price List.', 'error'); return; }
-  const existing = refundCart.find(c => c.id === item.id);
-  if (existing) { existing.qty += 1; } else { refundCart.push({id: item.id, name: item.name, price: item.price, qty: 1}); }
-  renderRefundCart();
-}
-function changeRefundQty(id, delta) {
-  const line = refundCart.find(c => c.id === id);
-  line.qty = Math.max(1, line.qty + delta);
-  renderRefundCart();
-}
-function removeRefundLine(id) {
-  refundCart = refundCart.filter(c => c.id !== id);
-  renderRefundCart();
-}
-function renderRefundCart() {
-  const linesDiv = document.getElementById('refundCartLines');
-  if (!refundCart.length) { linesDiv.innerHTML = '<div class="empty-note">No items yet.</div>'; }
-  else {
-    linesDiv.innerHTML = refundCart.map(c => `
+function renderRefundLines() {
+  const listEl = document.getElementById('refundLineList');
+  if (!refundSale.lines.length) {
+    listEl.innerHTML = '<div class="empty-note">This sale has no items.</div>';
+  } else {
+    listEl.innerHTML = refundSale.lines.map(l => `
       <div class="pos-cart-line">
-        <div>${escapeHtml(c.name)}<div class="meta small">${c.price} IQD each</div></div>
+        <div>${escapeHtml(l.name)}<div class="meta small">${l.unit_price} IQD each · ${l.remaining}${l.remaining !== l.quantity ? ' of ' + l.quantity : ''} left refundable</div></div>
         <div style="display:flex; align-items:center; gap:6px;">
-          <button class="btn small secondary" type="button" onclick="changeRefundQty('${c.id}',-1)">-</button>
-          <span>${c.qty}</span>
-          <button class="btn small secondary" type="button" onclick="changeRefundQty('${c.id}',1)">+</button>
-          <button class="btn small danger" type="button" onclick="removeRefundLine('${c.id}')">×</button>
+          <input type="number" min="0" max="${l.remaining}" value="0" step="any" style="width:70px; text-align:center;"
+                 data-sale-item-id="${l.sale_item_id}" ${l.remaining <= 0 ? 'disabled' : ''}
+                 oninput="renderRefundTotal()" onchange="renderRefundTotal()">
         </div>
       </div>`).join('');
   }
-  const total = refundCart.reduce((s,c) => s + c.price * c.qty, 0);
+  renderRefundTotal();
+}
+
+function renderRefundTotal() {
+  let total = 0;
+  document.querySelectorAll('#refundLineList input[data-sale-item-id]').forEach(inp => {
+    const line = refundSale.lines.find(l => String(l.sale_item_id) === inp.dataset.saleItemId);
+    const qty = Math.min(parseFloat(inp.value) || 0, line.remaining);
+    total += qty * line.unit_price;
+  });
   document.getElementById('refundCartTotal').textContent = total.toLocaleString() + ' IQD';
 }
+
 function prepareRefundSubmit() {
-  if (!refundCart.length) { window.VZToast.show('No items scanned yet.', 'error'); return false; }
-  document.getElementById('restockHidden').value = document.getElementById('restockCheck').checked ? 'on' : '';
+  if (!refundSale) { window.VZToast.show('Look up a sale first.', 'error'); return false; }
   const container = document.getElementById('refundFieldsHidden');
   container.innerHTML = '';
-  refundCart.forEach(c => {
-    container.innerHTML += `<input type="hidden" name="item_id" value="${c.id}"><input type="hidden" name="quantity" value="${c.qty}">`;
+  let any = false;
+  document.querySelectorAll('#refundLineList input[data-sale-item-id]').forEach(inp => {
+    const line = refundSale.lines.find(l => String(l.sale_item_id) === inp.dataset.saleItemId);
+    const qty = Math.min(parseFloat(inp.value) || 0, line.remaining);
+    if (qty > 0) {
+      any = true;
+      container.innerHTML += `<input type="hidden" name="sale_item_id" value="${inp.dataset.saleItemId}"><input type="hidden" name="quantity" value="${qty}">`;
+    }
   });
+  if (!any) { window.VZToast.show('Enter a quantity to refund for at least one item.', 'error'); return false; }
+  document.getElementById('restockHidden').value = document.getElementById('restockCheck').checked ? 'on' : '';
   return true;
 }
 </script>
