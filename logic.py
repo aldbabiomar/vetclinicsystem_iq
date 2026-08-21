@@ -1254,8 +1254,8 @@ def revenue_by_category(db, months_back=12):
         retail_lines AS (
           -- Reads the stored, already-250-rounded sale total (set at
           -- checkout — see app.py's pos_checkout()) rather than re-deriving
-          -- line_total*(1-discount%) per line, which would drift from the
-          -- receipt by up to ~125 IQD per sale. Every retail sale falls
+          -- each line's discounted amount per line, which would drift from
+          -- the receipt by up to ~125 IQD per sale. Every retail sale falls
           -- under this one category, so grouping at the sale level (not
           -- per line item) loses nothing.
           SELECT substr(s.sale_date,1,7) AS month, 'Retail' AS category, s.total AS amount

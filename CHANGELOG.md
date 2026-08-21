@@ -3,6 +3,14 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.0.1] - 2026-08-21
+
+### Fixed
+- Insights crashed on open (`only '%s', '%b', '%t' are allowed as
+  placeholders, got '%)'`) — a stray `%` inside a SQL comment tripped up
+  the database driver's placeholder parser even though it was never part
+  of an actual query.
+
 ## [1.0.0] - 2026-08-21
 
 ### Added
