@@ -3,6 +3,48 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.4.2] - 2026-08-22
+
+### Fixed
+- Visits, Refunds, and Cash Register all crashed (500 error) if their
+  date filter was ever malformed — now shows a clean "that date wasn't
+  valid" message instead. Same fix applied to the two new Cash Register
+  write actions (Pay From Register, Perform Audit).
+- Six PDF export routes (patient file, patient billing, sale receipt,
+  visit, inpatient, boarding) crashed instead of a clean "not found" if
+  the record no longer existed by the time the export ran. The Patient
+  Billing History PDF also showed money as "150000.00" instead of
+  "150,000" like every other export and the app itself — now consistent.
+- Editing a boarding stay after it was already picked up could silently
+  recalculate and overwrite the final billed total — the record was
+  never actually locked despite the code's own stated intent. Dates,
+  price, and total now stay locked once picked up; room, admitted items,
+  and special needs stay editable for ordinary corrections.
+- Restoring a database backup never reconciled the restored database
+  against the schema this app version actually expects — a backup taken
+  before a schema change (or a permission grant) landed would leave
+  things broken until the next unrelated update happened to fix it.
+  Restore now re-applies the same schema sync every update already runs.
+- The in-app updater's release pointer file was written directly rather
+  than atomically — a process killed at the exact wrong moment could
+  leave it corrupted. Now written to a temp file and swapped in atomically.
+- Follow-Ups and Wellness Reminders (including the "Missed Items" list on
+  the Dashboard) were sorted oldest-first; swept the rest of the app for
+  the same pattern and found no other instances. All three now show the
+  most recent item first, matching every other list in the app.
+- Newly-enabled grooming requests (toggling "Grooming?" to Yes while
+  editing an existing visit) were saved with no status at all, unlike a
+  brand-new visit's grooming request, which always starts at "Waiting".
+- The Follow-Ups status dropdown was missing "N/A" as an option, so a
+  visit in that state displayed as "Pending" in the dropdown even though
+  that wasn't what was actually stored.
+- Dashboard's "Missed Items" header had no gap above it, unlike every
+  other section on the page.
+- Boarding's list page recomputed each row's billing status with 2-3
+  extra queries per row (up to ~150 extra queries for a full page) — one
+  of them re-fetching data the page already had in hand. Now batched
+  into 2 queries total for the whole page.
+
 ## [1.4.1] - 2026-08-22
 
 ### Added

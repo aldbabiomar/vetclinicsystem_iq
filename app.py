@@ -1487,6 +1487,8 @@ def patient_history(patient_id):
 @auth.permission_required("manage_patients")
 def patient_export_file(patient_id):
     db = get_db()
+    if not db.execute("SELECT 1 FROM patients WHERE id=?", (patient_id,)).fetchone():
+        abort(404)
     buf = pdf_export.export_patient_file(db, patient_id)
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"{patient_id}_patient_file.pdf")
 
@@ -1495,6 +1497,8 @@ def patient_export_file(patient_id):
 @auth.permission_required("manage_patients")
 def patient_export_billing(patient_id):
     db = get_db()
+    if not db.execute("SELECT 1 FROM patients WHERE id=?", (patient_id,)).fetchone():
+        abort(404)
     buf = pdf_export.export_patient_billing(db, patient_id)
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"{patient_id}_billing.pdf")
 
@@ -1503,6 +1507,8 @@ def patient_export_billing(patient_id):
 @auth.permission_required("view_sales_history")
 def pos_export_receipt(sale_id):
     db = get_db()
+    if not db.execute("SELECT 1 FROM sales WHERE id=?", (sale_id,)).fetchone():
+        abort(404)
     buf = pdf_export.export_sale_receipt(db, sale_id)
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"sale_{sale_id}_receipt.pdf")
 
@@ -1511,6 +1517,8 @@ def pos_export_receipt(sale_id):
 @auth.permission_required("manage_visits")
 def visit_export_pdf(visit_id):
     db = get_db()
+    if not db.execute("SELECT 1 FROM visits WHERE id=?", (visit_id,)).fetchone():
+        abort(404)
     buf = pdf_export.export_visit_pdf(db, visit_id)
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"{visit_id}_visit.pdf")
 
@@ -1519,6 +1527,8 @@ def visit_export_pdf(visit_id):
 @auth.permission_required("manage_inpatient")
 def inpatient_export_pdf(case_id):
     db = get_db()
+    if not db.execute("SELECT 1 FROM inpatient_cases WHERE id=?", (case_id,)).fetchone():
+        abort(404)
     buf = pdf_export.export_inpatient_pdf(db, case_id)
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"inpatient_{case_id}.pdf")
 
@@ -1670,6 +1680,11 @@ def visits_list():
     db = get_db()
     sort = request.args.get("sort", "date")
     day_filter = request.args.get("date")
+    try:
+        logic.parse_date(day_filter)
+    except ValueError:
+        flash("That date wasn't valid — showing all dates instead.", "error")
+        day_filter = None
     search = request.args.get("q", "").strip()
     page = get_page()
 
@@ -1776,7 +1791,14 @@ def visit_edit(visit_id):
             "grooming_needed": grooming_needed, "grooming_services": grooming_services,
             "grooming_notes": f.get("grooming_notes") if grooming_needed == "Y" else None,
             "grooming_admitted_items": f.get("grooming_admitted_items") if grooming_needed == "Y" else None,
-            "grooming_status": f.get("grooming_status") if grooming_needed == "Y" else None,
+            # Falls back to "Waiting" when grooming_needed just flipped
+            # N->Y in this same edit — the status/contacted controls only
+            # render for a visit that already had grooming_needed='Y' when
+            # the page loaded (templates/visit_form_edit.html), so a fresh
+            # Y transition submits no grooming_status at all. Matches
+            # _create_visit()'s same "Waiting" default for a brand-new
+            # grooming request, instead of silently writing NULL.
+            "grooming_status": (f.get("grooming_status") or "Waiting") if grooming_needed == "Y" else None,
             "grooming_contacted": f.get("grooming_contacted", "N"),
             "payment_status": f.get("payment_status", "N/A"),
         }
@@ -3469,11 +3491,26 @@ def boarding_page():
         q += " WHERE b.dismissed=false"
     q += " ORDER BY b.entry_date DESC LIMIT ? OFFSET ?"
     rows = [dict(r) for r in db.execute(q, (PER_PAGE, page_offset(page))).fetchall()]
+    # Batched across the whole page instead of a paid-sum + incident-count
+    # query per row (boarding_billing_summary() alone was also redundantly
+    # re-fetching the boarding_sessions row this page already has) — see
+    # logic.boarding_billing_summary_from_fields().
+    ids = [r["id"] for r in rows]
+    paid_by_id = {}
+    incidents_by_id = {}
+    if ids:
+        placeholders = ",".join("?" * len(ids))
+        paid_by_id = {p["boarding_id"]: p["s"] for p in db.execute(
+            f"SELECT boarding_id, COALESCE(SUM(amount),0) s FROM payments "
+            f"WHERE boarding_id IN ({placeholders}) GROUP BY boarding_id", ids
+        ).fetchall()}
+        incidents_by_id = {i["boarding_id"]: i["c"] for i in db.execute(
+            f"SELECT boarding_id, COUNT(*) c FROM boarding_incidents "
+            f"WHERE boarding_id IN ({placeholders}) GROUP BY boarding_id", ids
+        ).fetchall()}
     for r in rows:
-        r["billing"] = logic.boarding_billing_summary(db, r["id"])
-        r["incident_count"] = db.execute(
-            "SELECT COUNT(*) c FROM boarding_incidents WHERE boarding_id=?", (r["id"],)
-        ).fetchone()["c"]
+        r["billing"] = logic.boarding_billing_summary_from_fields(r, paid_by_id.get(r["id"], 0))
+        r["incident_count"] = incidents_by_id.get(r["id"], 0)
     return render_template("boarding.html", sessions=rows, show_all=show_all, today=date.today().isoformat(),
                             page=page, total_pages=page_count(total), total_count=total)
 
@@ -3548,6 +3585,13 @@ def boarding_edit(boarding_id):
     total_is_auto = total is None
     if total_is_auto:
         total = logic.boarding_suggested_total(price_per_day, entry_date, dismissal_date)
+    # Once picked up, boarding_dismiss() locked in the final billed
+    # figure — dates/price/total from this form are ignored from that
+    # point on, same as a settled invoice. Other fields (room, admitted
+    # items, special needs) stay editable for ordinary record corrections.
+    if old["dismissed"]:
+        entry_date, dismissal_date = old["entry_date"], old["dismissal_date"]
+        price_per_day, total, total_is_auto = old["price_per_day"], old["total"], old["total_is_auto"]
     special_needs = f.get("special_needs") == "on"
     new_vals = {
         "entry_date": entry_date, "dismissal_date": dismissal_date, "admitted_items": f.get("admitted_items"),
@@ -3567,6 +3611,9 @@ def boarding_edit(boarding_id):
     auth.log_change(db, "boarding_sessions", str(boarding_id), "update", changes)
     db.commit()
     flash("Boarding session updated.", "success")
+    if old["dismissed"]:
+        flash("This stay is already picked up, so dates/price/total stayed locked at the billed figure — "
+              "only room, admitted items, and special needs were changed.", "error")
     return redirect(url_for("boarding_page"))
 
 
@@ -3651,6 +3698,8 @@ def boarding_payment(boarding_id):
 @auth.permission_required("manage_boarding")
 def boarding_export_pdf(boarding_id):
     db = get_db()
+    if not db.execute("SELECT 1 FROM boarding_sessions WHERE id=?", (boarding_id,)).fetchone():
+        abort(404)
     buf = pdf_export.export_boarding_pdf(db, boarding_id)
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"boarding_{boarding_id}.pdf")
 
@@ -4441,6 +4490,11 @@ def refunds_page():
     db = get_db()
     page = get_page()
     date_filter = request.args.get("date", "").strip() or None
+    try:
+        logic.parse_date(date_filter)
+    except ValueError:
+        flash("That date wasn't valid — showing all dates instead.", "error")
+        date_filter = None
     count_where = " WHERE refund_date = ?" if date_filter else ""
     count_params = [date_filter] if date_filter else []
     total = db.execute(f"SELECT COUNT(*) c FROM refunds{count_where}", count_params).fetchone()["c"]
@@ -4625,6 +4679,11 @@ def refund_service_save():
 def cash_register_page():
     db = get_db()
     day = request.args.get("date", "").strip() or date.today().isoformat()
+    try:
+        logic.parse_date(day)
+    except ValueError:
+        flash("That date wasn't valid — showing today instead.", "error")
+        day = date.today().isoformat()
     ledger = logic.cash_register_ledger(db, day)
     totals = logic.cash_register_totals(db, day)
     payouts = logic.cash_register_payouts_for_day(db, day)
@@ -4638,7 +4697,11 @@ def cash_register_page():
 def cash_register_payout_new():
     db = get_db()
     f = request.form
-    day = f.get("day") or date.today().isoformat()
+    try:
+        day = clean_date(f.get("day"), field="day") or date.today().isoformat()
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("cash_register_page"))
     try:
         amount = parse_money(f.get("amount"), required=True)
     except BadNumber:
@@ -4669,7 +4732,11 @@ def cash_register_payout_new():
 def cash_register_audit_new():
     db = get_db()
     f = request.form
-    day = f.get("day") or date.today().isoformat()
+    try:
+        day = clean_date(f.get("day"), field="day") or date.today().isoformat()
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("cash_register_page"))
     try:
         counted_cash = parse_money(f.get("counted_cash"), required=True)
     except BadNumber:
@@ -4905,7 +4972,7 @@ def settings_restore_now():
         return {"ok": ok, "message": message}
 
     job_id = jobs.start(
-        ["Checking backup file", "Restoring database", "Recording result", "Done"],
+        ["Checking backup file", "Restoring database", "Reconciling schema", "Recording result", "Done"],
         task,
     )
     return jsonify({"job_id": job_id})

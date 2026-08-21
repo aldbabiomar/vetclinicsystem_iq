@@ -328,9 +328,33 @@ def run_restore(get_fresh_db, dump_path, triggered_by=None, on_progress=None):
         _try_log_restore(get_fresh_db, "failed", dump_path, str(e), started, triggered_by)
         return False, f"Restore failed: {e}"
 
-    step(2)  # Recording result
+    step(2, "Reconciling schema")
+    # A backup taken before this running app version shipped a schema
+    # change (a new column/table, or a retroactive permission grant —
+    # see setup.INCREMENTAL_SCHEMA_STATEMENTS) restores the database back
+    # to that older shape. Nothing else re-syncs it afterward — the code
+    # currently running keeps serving requests against what it expects,
+    # not what actually got restored — so without this, features that
+    # depend on anything added since the backup start failing with
+    # "column does not exist" (or, for a permission grant, staff losing
+    # access to a page they should have) until the next in-app update
+    # happens to run setup.apply_schema() again. These statements are
+    # additive-only and idempotent by the same contract that lets them
+    # run on every normal app startup, so re-running them here is safe.
+    try:
+        import setup
+        setup.apply_schema()
+        setup.apply_incremental_migrations()
+    except Exception as e:
+        err = (f"Restore succeeded, but bringing the restored database up to this app version's "
+                f"schema failed: {e}. The data is restored, but some newer features may not work "
+                f"until this is resolved.")
+        _try_log_restore(get_fresh_db, "failed", dump_path, err, started, triggered_by)
+        return False, err
+
+    step(3)  # Recording result
     _try_log_restore(get_fresh_db, "success", dump_path, None, started, triggered_by)
-    step(3)  # Done
+    step(4)  # Done
     return True, f"Restored from {dump_path}"
 
 

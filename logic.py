@@ -511,11 +511,14 @@ def boarding_suggested_total(price_per_day, entry_date, dismissal_date):
     return round(price_per_day * boarding_nights(entry_date, dismissal_date), 2)
 
 
-def boarding_billing_summary(db, boarding_id):
-    b = db.execute(
-        "SELECT total, total_is_auto, price_per_day, entry_date, dismissal_date, dismissed "
-        "FROM boarding_sessions WHERE id=?", (boarding_id,)
-    ).fetchone()
+def boarding_billing_summary_from_fields(b, paid):
+    """Same computation as boarding_billing_summary(), factored out so a
+    caller that already has the boarding_sessions row in hand (e.g. a list
+    page rendering many rows at once) can skip re-fetching it and the
+    per-row payments query — see boarding_page() in app.py, which batches
+    `paid` across the whole page in one query instead of one per row.
+    `b` needs total, total_is_auto, price_per_day, entry_date,
+    dismissal_date, dismissed."""
     if not b:
         subtotal = 0
     elif b["total_is_auto"] and not b["dismissed"] and b["price_per_day"]:
@@ -530,9 +533,17 @@ def boarding_billing_summary(db, boarding_id):
         subtotal = boarding_suggested_total(b["price_per_day"], b["entry_date"], b["dismissal_date"]) or 0
     else:
         subtotal = b["total"] or 0
-    paid_row = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE boarding_id=?", (boarding_id,)).fetchone()
-    total, paid, balance, status = compute_bill_totals(subtotal, 0, paid_row["s"])
+    total, paid, balance, status = compute_bill_totals(subtotal, 0, paid)
     return {"total": total, "paid": paid, "balance": balance, "status": status}
+
+
+def boarding_billing_summary(db, boarding_id):
+    b = db.execute(
+        "SELECT total, total_is_auto, price_per_day, entry_date, dismissal_date, dismissed "
+        "FROM boarding_sessions WHERE id=?", (boarding_id,)
+    ).fetchone()
+    paid_row = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE boarding_id=?", (boarding_id,)).fetchone()
+    return boarding_billing_summary_from_fields(b, paid_row["s"])
 
 
 def refresh_boarding_total(db, boarding_id):
@@ -592,7 +603,7 @@ def followups(db, only_pending=False):
     rows = [dict(r) for r in db.execute(q, params).fetchall()]
     today = date.today()
     out = [_annotate_followup(r, today) for r in rows]
-    out.sort(key=lambda r: (r["followup_date"] or date.max))
+    out.sort(key=lambda r: (r["followup_date"] or date.min), reverse=True)
     return out
 
 
@@ -624,7 +635,7 @@ def followups_page(db, only_pending=False, limit=20, offset=0):
            p.animal_name, o.id as owner_id, o.name as owner_name, o.phone
     FROM visits v JOIN patients p ON p.id = v.patient_id JOIN owners o ON o.id = p.owner_id
     WHERE {where}
-    ORDER BY COALESCE(v.followup_date, '9999-12-31') ASC, v.id ASC
+    ORDER BY COALESCE(v.followup_date, '0001-01-01') DESC, v.id DESC
     LIMIT ? OFFSET ?
     """
     rows = [dict(r) for r in db.execute(q, params + [limit, offset]).fetchall()]
@@ -669,7 +680,7 @@ def wellness_reminders(db, only_due=False):
         if only_due and not r["due"]:
             continue
         out.append(r)
-    out.sort(key=lambda r: (r["wellness_next_dose_date"] or date.max))
+    out.sort(key=lambda r: (r["wellness_next_dose_date"] or date.min), reverse=True)
     return out
 
 
@@ -696,7 +707,7 @@ def wellness_reminders_page(db, limit=20, offset=0):
            p.animal_name, o.id as owner_id, o.name as owner_name, o.phone
     FROM visits v JOIN patients p ON p.id = v.patient_id JOIN owners o ON o.id = p.owner_id
     WHERE v.wellness_needed = 'Y' AND v.wellness_next_dose_date IS NOT NULL
-    ORDER BY COALESCE(v.wellness_next_dose_date, '9999-12-31') ASC, v.id ASC
+    ORDER BY COALESCE(v.wellness_next_dose_date, '0001-01-01') DESC, v.id DESC
     LIMIT ? OFFSET ?
     """
     rows = [dict(r) for r in db.execute(q, [limit, offset]).fetchall()]
@@ -776,6 +787,16 @@ def missed_items(db):
         if changed and (today - changed).days >= MISSED_WINDOW_DAYS:
             out.append({"kind": "Lost to Follow Up", "visit_id": r["id"], "animal_name": r["animal_name"],
                         "deadline": fmt_date(changed), "responsible": r["doctor"] or r["created_by"]})
+    # Newest missed deadline first — the three sources above are each
+    # already sorted that way individually, but concatenating them
+    # doesn't interleave them, so the combined list needs its own sort.
+    # "deadline" is a date object for the first two sources (straight from
+    # a DATE column) and a string for the third (fmt_date()'s output) —
+    # normalize to ISO text so the comparison never mixes types.
+    def _deadline_key(r):
+        d = r["deadline"]
+        return d.isoformat() if hasattr(d, "isoformat") else (d or "")
+    out.sort(key=_deadline_key, reverse=True)
     return out
 
 

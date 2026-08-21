@@ -262,8 +262,19 @@ def _probe_health(release_path, timeout=20):
 
 
 def _write_pointer(release_name):
-    with open(_pointer_file(), "w") as f:
+    # Write-then-atomic-rename, not a direct truncate-and-write: this file
+    # is what tells the launcher script which release folder to run on
+    # every start, so a process killed mid-write (power loss, OOM-kill)
+    # must never leave it half-written. The temp file has to live in the
+    # same directory as the real one — os.replace()'s atomicity guarantee
+    # only holds within a single filesystem.
+    pointer_path = _pointer_file()
+    tmp_path = pointer_path + ".tmp"
+    with open(tmp_path, "w") as f:
         f.write(release_name)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, pointer_path)
 
 
 def _prune_old_releases(keep):

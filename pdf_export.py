@@ -174,12 +174,12 @@ def export_patient_billing(db, patient_id):
         for l in summary["lines"]:
             # Plain Table cells (unlike Paragraph) are drawn literally, not
             # parsed as markup, so no escaping needed/wanted here.
-            data.append([l["name"], f"{l['price']:.2f}"])
-        data.append(["Subtotal", f"{summary['subtotal']:.2f}"])
+            data.append([l["name"], f"{l['price']:,.0f}"])
+        data.append(["Subtotal", f"{summary['subtotal']:,.0f}"])
         if summary["discount_percent"]:
-            data.append([f"Discount ({summary['discount_percent']:.0f}%)", f"-{summary['subtotal'] - summary['total']:.2f}"])
-        data.append(["Total", f"{summary['total']:.2f}"])
-        data.append(["Paid", f"{summary['paid']:.2f}"])
+            data.append([f"Discount ({summary['discount_percent']:.0f}%)", f"-{summary['subtotal'] - summary['total']:,.0f}"])
+        data.append(["Total", f"{summary['total']:,.0f}"])
+        data.append(["Paid", f"{summary['paid']:,.0f}"])
         data.append(["Status", summary["status"]])
 
         t = Table(data, colWidths=[110 * mm, 40 * mm])
@@ -195,7 +195,7 @@ def export_patient_billing(db, patient_id):
         story.append(Spacer(1, 12))
         grand_total += summary["total"]
 
-    story.append(Paragraph(f"<b>Grand total across all visits: {grand_total:.2f} IQD</b>", ss["Body"]))
+    story.append(Paragraph(f"<b>Grand total across all visits: {grand_total:,.0f} IQD</b>", ss["Body"]))
     doc.build(story)
     buf.seek(0)
     return buf
