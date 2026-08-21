@@ -52,8 +52,8 @@
 <div class="table-wrap">
 <table class="inv-table" style="table-layout:fixed; width:100%;">
 <colgroup>
-  <col style="width:5%;">
-  <col style="width:24%;">
+  <col style="width:7%;">
+  <col style="width:22%;">
   <col style="width:11%;">
   <col style="width:7%;">
   <col style="width:13%;">
@@ -62,13 +62,13 @@
   <col style="width:11%;">
   <col style="width:14%;">
 </colgroup>
-  <thead><tr><th>ID</th><th>Name</th><th>Category</th><th>Unit</th><th>Barcode</th><th style="white-space:normal;">Track Expiry</th><th class="num-col">Cost (IQD)</th><th>Distributor</th><th></th></tr></thead>
+  <thead><tr><th>ID</th><th>Name</th><th>Category</th><th>Unit</th><th>Barcode</th><th>Track Expiry</th><th class="num-col">Cost (IQD)</th><th>Distributor</th><th></th></tr></thead>
   <tbody>
     {% for i in items %}
     <form id="edit-{{ i.id }}" method="post" action="{{ url_for('inventory_catalog_edit', item_id=i.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
     <tr data-edit-form="edit-{{ i.id }}" class="{{ 'row-flag-mismatch' if i.id in flagged_inventory }}" {% if i.id in flagged_inventory %}title="Retail data inconsistency: no active Retail Price List item is linked to this inventory item."{% endif %}>
-      <td class="muted">{{ i.id }}</td>
+      <td class="muted" style="white-space:nowrap;">{{ i.id }}</td>
       <td><input form="edit-{{ i.id }}" name="name" value="{{ i.name }}" style="border:none; background:transparent; padding:2px; width:100%;"></td>
       <td><select form="edit-{{ i.id }}" name="category" style="border:none; background:transparent;">{% for c in categories %}<option {{ 'selected' if i.category==c }}>{{ c }}</option>{% endfor %}</select></td>
       <td><input form="edit-{{ i.id }}" name="unit" value="{{ i.unit or '' }}" style="border:none; background:transparent; padding:2px; width:70px;"></td>

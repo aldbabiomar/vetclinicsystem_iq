@@ -2811,9 +2811,26 @@ def distributor_export_pdf(dist_id):
 @app.route("/consignment")
 @auth.permission_required("view_consignment")
 def consignment_overview():
-    db = get_db()
-    rows = logic.consignment_distributors_overview(db)
-    return render_template("consignment_overview.html", rows=rows)
+    # consignment_distributors_overview() recomputes full inventory
+    # status per Consignment item per distributor — slow enough on a
+    # catalog with real history to need the same background-job loading
+    # shell Insights/Retention use, rather than blocking the request.
+    def compute(update):
+        con = dbmod.connect()
+        try:
+            rows = logic.consignment_distributors_overview(con)
+        finally:
+            con.close()
+        return {"rows": rows}
+
+    return _render_with_progress(
+        "consignment_overview.html",
+        ["Computing distributor balances"],
+        compute,
+        page_title="Loading Consignment Overview",
+        page_note="Computing shelf stock and amount owed for every distributor with Consignment items — "
+                   "this can take a moment on a clinic with a lot of inventory history.",
+    )
 
 
 @app.route("/consignment/items")
@@ -2830,58 +2847,65 @@ def consignment_items():
     return render_template("consignment_items.html", items=rows, distributors=distributors, locked=locked)
 
 
-@app.route("/consignment/items/<item_id>/flag", methods=["POST"])
+@app.route("/consignment/items/bulk-edit", methods=["POST"])
 @auth.permission_required("manage_consignment_items")
-def consignment_item_flag(item_id):
-    db = get_db()
-    item = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
-    if not item:
-        flash("Item not found.", "error")
-        return redirect(url_for("consignment_items"))
-    if item["category"] != "Retail":
-        flash("Only Retail items can be flagged as Consignment.", "error")
-        return redirect(url_for("consignment_items"))
-    if logic.consignment_item_locked(db, item_id):
-        flash("This item already has consignment activity against it — its distributor can't be changed. "
-              "Create a new inventory item for a different supply source instead.", "error")
-        return redirect(url_for("consignment_items"))
-    distributor_id = request.form.get("distributor_id") or None
-    if not distributor_id:
-        flash("Pick a distributor to flag this item as Consignment.", "error")
-        return redirect(url_for("consignment_items"))
-    try:
-        cost_price = parse_money(request.form.get("cost_price"), required=True)
-    except BadNumber:
-        flash("Cost Price is required and must be a valid number to flag an item as Consignment.", "error")
-        return redirect(url_for("consignment_items"))
-    db.execute(
-        "UPDATE inventory_list SET ownership_type='Consignment', distributor_id=?, cost_price=? WHERE id=?",
-        (distributor_id, cost_price, item_id),
-    )
-    auth.log_change(db, "inventory_list", item_id, "update",
-                     {"ownership_type": (item["ownership_type"], "Consignment")})
-    db.commit()
-    flash(f"{item['name']} flagged as Consignment.", "success")
-    return redirect(url_for("consignment_items"))
+def consignment_items_bulk_edit():
+    """
+    Same batching rationale as inventory_catalog_bulk_edit() (see that
+    route's docstring) — one request, one transaction, instead of the old
+    flag/unflag flow's one click (and full page reload) per item. Flips
+    ownership_type via an inline "Consignment?" checkbox + Distributor +
+    Cost Price, saved together through the shared unsaved-changes.js Save
+    Changes button, the same pattern Inventory Catalog's Track Expiry
+    column already uses.
 
-
-@app.route("/consignment/items/<item_id>/unflag", methods=["POST"])
-@auth.permission_required("manage_consignment_items")
-def consignment_item_unflag(item_id):
+    A locked item (real receiving/sale/settlement activity already
+    against it) is skipped entirely, silently — its checkbox/distributor
+    are disabled client-side so a normal user can't reach this, but
+    nothing here trusts that alone, same as the dedicated flag/unflag
+    routes this replaced always re-checked server-side too.
+    """
     db = get_db()
-    item = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
-    if not item or item["ownership_type"] != "Consignment":
-        flash("Item not found or not currently a Consignment item.", "error")
-        return redirect(url_for("consignment_items"))
-    if logic.consignment_item_locked(db, item_id):
-        flash("This item already has consignment activity against it and can't be unflagged — "
-              "any remaining shelf stock should go through Consignment > Returns first.", "error")
-        return redirect(url_for("consignment_items"))
-    db.execute("UPDATE inventory_list SET ownership_type='Owned' WHERE id=?", (item_id,))
-    auth.log_change(db, "inventory_list", item_id, "update", {"ownership_type": ("Consignment", "Owned")})
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items") or []
+    saved, errors = [], {}
+    for item in items:
+        item_id = str(item.get("id", ""))
+        fields = item.get("fields") or {}
+        old = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+        if not old or old["category"] != "Retail":
+            errors[item_id] = "Item not found."
+            continue
+        if logic.consignment_item_locked(db, item_id):
+            continue
+        want_consignment = fields.get("is_consignment") == "on"
+        if want_consignment:
+            distributor_id = fields.get("distributor_id") or None
+            if not distributor_id:
+                errors[item_id] = "Pick a distributor to flag this item as Consignment."
+                continue
+            try:
+                cost_price = parse_money(fields.get("cost_price"), required=True)
+            except BadNumber:
+                errors[item_id] = "Cost Price is required and must be a valid number to flag an item as Consignment."
+                continue
+            if has_negative(cost_price):
+                errors[item_id] = "Cost Price can't be negative."
+                continue
+            new_vals = {"ownership_type": "Consignment", "distributor_id": distributor_id, "cost_price": cost_price}
+        else:
+            new_vals = {"ownership_type": "Owned", "distributor_id": None, "cost_price": old["cost_price"]}
+        changes = auth.diff_dict(old, new_vals)
+        if not changes:
+            continue
+        db.execute(
+            "UPDATE inventory_list SET ownership_type=?, distributor_id=?, cost_price=? WHERE id=?",
+            (new_vals["ownership_type"], new_vals["distributor_id"], new_vals["cost_price"], item_id),
+        )
+        auth.log_change(db, "inventory_list", item_id, "update", changes)
+        saved.append(item_id)
     db.commit()
-    flash(f"{item['name']} is no longer flagged as Consignment.", "success")
-    return redirect(url_for("consignment_items"))
+    return jsonify({"ok": len(errors) == 0, "saved": saved, "errors": errors})
 
 
 def _consignment_item_choices(db):

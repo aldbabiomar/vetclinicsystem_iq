@@ -2115,7 +2115,18 @@ def consignment_distributors_overview(db):
     consignment_balance() per distributor — fine at the scale this
     screen is for (a clinic's number of distributor relationships, not
     its transaction volume).
+
+    inventory_status(db) is computed exactly ONCE up front and looked up
+    by item_id from a dict — NOT via inventory_status_by_id() per
+    Consignment item. inventory_status_by_id() recomputes the status of
+    every active item in the whole catalog (including a query per item
+    for its post-audit transaction count) just to return one row, so
+    calling it once per Consignment item per distributor was quietly
+    O(distributors x items-per-distributor x full-catalog-size) — fine
+    with a handful of test rows, severe on a clinic's real inventory
+    history.
     """
+    status_by_item = {s["item_id"]: s for s in inventory_status(db)}
     distributors = db.execute(
         "SELECT DISTINCT d.id, d.name FROM distributors d "
         "JOIN inventory_list i ON i.distributor_id = d.id "
@@ -2130,7 +2141,7 @@ def consignment_distributors_overview(db):
         ).fetchall()
         shelf_units, shelf_value = 0, 0
         for it in items:
-            status = inventory_status_by_id(db, it["id"])
+            status = status_by_item.get(it["id"])
             stock = (status["current_stock"] if status else 0) or 0
             shelf_units += stock
             shelf_value += stock * (it["cost_price"] or 0)
@@ -2192,11 +2203,29 @@ def consignment_item_locked(db, item_id):
     switches distributors mid-life; a supply-source change means a new
     inventory_list row, not a re-point of this one, so historical
     settlement math for the old distributor can't silently break).
+
+    The sale_items check is deliberately scoped to items that are
+    CURRENTLY ownership_type='Consignment' — consignment_balance() only
+    ever sums a sale_items row into a distributor's balance while its
+    item is presently Consignment (see that function's own query), so a
+    plain Retail item's sale history from whenever it was Owned isn't
+    "consignment-relevant activity" and shouldn't block it from being
+    flagged as Consignment for the first time. Checking unconditionally
+    used to mean almost any actively-sold retail item could never be
+    flagged at all — confirmed against a 25-year synthetic dataset, where
+    every single currently-Owned Retail item had prior sales and so was
+    permanently locked out of the feature entirely. consignment_receipts/
+    shrinkage/returns don't have this problem: those tables can only ever
+    gain a row for an item that was Consignment at the moment it happened
+    (each recording route itself requires ownership_type='Consignment'
+    first), so an Owned item can never have false-positive rows there.
     """
     if db.execute("SELECT 1 FROM consignment_receipts WHERE item_id=?", (item_id,)).fetchone():
         return True
-    if db.execute("SELECT 1 FROM sale_items WHERE item_id=?", (item_id,)).fetchone():
-        return True
+    item = db.execute("SELECT ownership_type FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+    if item and item["ownership_type"] == "Consignment":
+        if db.execute("SELECT 1 FROM sale_items WHERE item_id=?", (item_id,)).fetchone():
+            return True
     if db.execute("SELECT 1 FROM consignment_shrinkage WHERE item_id=?", (item_id,)).fetchone():
         return True
     if db.execute("SELECT 1 FROM consignment_returns WHERE item_id=?", (item_id,)).fetchone():

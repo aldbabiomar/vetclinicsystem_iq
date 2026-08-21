@@ -23,3 +23,7 @@ Thumbs.db
 # nested under this repo by mistake, never track it.
 /vetzone-data/
 /vetzone-releases/
+
+# Synthetic 25-year test-data dump + apply script (local dev only — never
+# committed, since it's a full database export, not source).
+/dev_seed/

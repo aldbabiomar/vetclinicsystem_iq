@@ -3,6 +3,32 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.2.0] - 2026-08-21
+
+### Added
+- Consignment Items now uses the same bulk-edit-and-save pattern as
+  Inventory Catalog's Track Expiry column: check "Consignment?" and pick a
+  distributor for as many items as needed, then save them all at once,
+  instead of flagging one item at a time through a separate button. Comes
+  with the same unsaved-changes safeguards (dirty-row highlighting, a
+  save/discard/keep-editing prompt on navigating away).
+- Consignment Overview now shows the same step-by-step loading screen as
+  Insights while it computes distributor balances, instead of leaving the
+  page blank.
+
+### Fixed
+- An item that had ever appeared in a sale was permanently blocked from
+  being flagged as Consignment, even if it was never actually Consignment
+  at the time of those sales. On real data this affected effectively every
+  actively-sold item, silently breaking the flagging feature. The lock now
+  only applies to items that are currently Consignment and have sold while
+  Consignment.
+- Consignment Overview recomputed full inventory status once per
+  distributor instead of once total, making it far slower than it needed
+  to be as the catalog and distributor list grew.
+- "Track Expiry" header on Inventory Catalog wrapped awkwardly (the "y"
+  landing on its own line); the ID column could wrap mid-value too.
+
 ## [1.1.2] - 2026-08-21
 
 ### Fixed
