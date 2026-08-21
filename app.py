@@ -1944,6 +1944,7 @@ def visit_payment_add(visit_id):
     auth.log_change(db, "payments", str(payment_id), "create")
     db.commit()
     flash("Payment recorded.", "success")
+    flash_cash_denomination_warning(amount)
     return redirect(url_for("visit_detail", visit_id=visit_id))
 
 
@@ -2706,6 +2707,9 @@ def distributor_edit(dist_id):
 @auth.permission_required("manage_distributors")
 def distributor_delete(dist_id):
     db = get_db()
+    if not db.execute("SELECT 1 FROM distributors WHERE id=?", (dist_id,)).fetchone():
+        flash("Distributor not found.", "error")
+        return redirect(url_for("distributors_list"))
     # A distributor can be referenced from six tables (inventory items,
     # manual ledger bills, and every Consignment table) — a bare DELETE
     # would just crash with a raw ForeignKeyViolation the moment any of
@@ -2783,6 +2787,9 @@ def distributor_bill_new(dist_id):
 @auth.permission_required("manage_distributors")
 def distributor_bill_delete(dist_id, bill_id):
     db = get_db()
+    if not db.execute("SELECT 1 FROM distributor_bills WHERE id=? AND distributor_id=?", (bill_id, dist_id)).fetchone():
+        flash("Bill not found.", "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
     has_payments = db.execute(
         "SELECT 1 FROM distributor_bill_payments WHERE bill_id=? LIMIT 1", (bill_id,)
     ).fetchone()
@@ -2835,6 +2842,14 @@ def distributor_payment_new(dist_id, bill_id):
 @auth.permission_required("manage_distributors")
 def distributor_payment_delete(dist_id, payment_id):
     db = get_db()
+    owned = db.execute(
+        "SELECT 1 FROM distributor_bill_payments p JOIN distributor_bills b ON b.id = p.bill_id "
+        "WHERE p.id=? AND b.distributor_id=?",
+        (payment_id, dist_id),
+    ).fetchone()
+    if not owned:
+        flash("Payment not found.", "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
     db.execute("DELETE FROM distributor_bill_payments WHERE id=?", (payment_id,))
     auth.log_change(db, "distributor_bill_payments", str(payment_id), "delete")
     db.commit()
@@ -3627,6 +3642,7 @@ def boarding_payment(boarding_id):
     auth.log_change(db, "payments", str(payment_id), "create")
     db.commit()
     flash("Payment recorded.", "success")
+    flash_cash_denomination_warning(amount)
     return redirect(url_for("boarding_page"))
 
 
@@ -3813,28 +3829,7 @@ def pos_history():
         f"SELECT s.*, u.full_name as cashier_name FROM sales s LEFT JOIN users u ON u.id=s.cashier_id{where} "
         "ORDER BY s.sale_date DESC LIMIT ? OFFSET ?", params + [PER_PAGE, page_offset(page)]
     ).fetchall()
-    day_totals = None
-    if date_filter:
-        # Scoped to every sale that day, not just the current page — this
-        # is meant for end-of-day cash/card/transfer reconciliation against
-        # the register, so it has to reflect the whole day regardless of
-        # pagination.
-        totals_rows = db.execute(
-            "SELECT payment_method, COALESCE(SUM(total), 0) AS total FROM sales "
-            "WHERE sale_date LIKE ? GROUP BY payment_method",
-            (date_filter + "%",),
-        ).fetchall()
-        day_totals = {"Cash": 0, "Card": 0, "Transfer": 0, "other": 0, "all": 0}
-        for r in totals_rows:
-            if r["payment_method"] in ("Cash", "Card", "Transfer"):
-                day_totals[r["payment_method"]] = r["total"]
-            else:
-                # Anything outside the three known methods (blank/legacy/
-                # unexpected value) still counts toward the day's grand
-                # total — never silently dropped from a reconciliation figure.
-                day_totals["other"] += r["total"]
-            day_totals["all"] += r["total"]
-    return render_template("pos_history.html", sales=sales, date_filter=date_filter, day_totals=day_totals,
+    return render_template("pos_history.html", sales=sales, date_filter=date_filter,
                             page=page, total_pages=page_count(total), total_count=total)
 
 
@@ -4061,9 +4056,12 @@ def inpatient_billing_add(case_id):
 def inpatient_billing_delete(case_id, line_id):
     db = get_db()
     row = db.execute("SELECT timestamp FROM inpatient_billing WHERE id=? AND case_id=?", (line_id, case_id)).fetchone()
+    if not row:
+        flash("That billing line was already removed.", "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
     db.execute("DELETE FROM inpatient_billing WHERE id=? AND case_id=?", (line_id, case_id))
     logic.refresh_inpatient_total(db, case_id)
-    if row and row["timestamp"]:
+    if row["timestamp"]:
         logic.recompute_month_summary(db, row["timestamp"][:7])
     auth.log_change(db, "inpatient_billing", str(line_id), "delete")
     db.commit()
@@ -4130,6 +4128,7 @@ def inpatient_payment_add(case_id):
     auth.log_change(db, "payments", str(payment_id), "create")
     db.commit()
     flash("Payment recorded.", "success")
+    flash_cash_denomination_warning(amount)
     return redirect(url_for("inpatient_detail", case_id=case_id))
 
 
@@ -4349,6 +4348,7 @@ def insights():
                 "WHERE date >= ? GROUP BY method ORDER BY total DESC",
                 (cutoff,),
             ).fetchall()]),
+            ("cash_register_health", lambda c: logic.cash_register_last_30_days(c)),
         ]
         results = {}
         with ThreadPoolExecutor(max_workers=len(job_defs)) as ex:
@@ -4370,12 +4370,13 @@ def insights():
             "active_client_count": active_client_count,
             "weekday_load": results["weekday_load"], "occupancy": results["occupancy"],
             "payment_mix": results["payment_mix"], "months_back": months_back,
+            "cash_register_health": results["cash_register_health"],
         }
 
     return _render_with_progress(
         "insights.html",
         ["Revenue by category", "Vet performance", "Client value",
-         "Weekday appointment load", "Inpatient/boarding occupancy", "Payment mix"],
+         "Weekday appointment load", "Inpatient/boarding occupancy", "Payment mix", "Cash Register health"],
         compute,
         page_title="Loading Insights",
         page_note="Running six report queries in parallel \u2014 this can take a moment on a clinic with a lot of history.",
@@ -4413,6 +4414,26 @@ def retention():
     )
 
 
+# Same vocabulary as the POS payment method <select> (templates/pos.html)
+# — how the refunded money actually left the register, not necessarily
+# the same method the original sale/payment used. Feeds the Cash
+# Register's per-bucket totals (see cash_register_page below).
+PAYMENT_METHODS = ["Cash", "Card", "Transfer"]
+
+
+def flash_cash_denomination_warning(amount):
+    """Gentle, non-blocking heads-up (same spirit as the Price List one)
+    when a manually-typed payment/refund amount isn't a 250 IQD
+    multiple. Doesn't affect what's saved — this is only here because
+    the Cash Register audit compares a day's collected total against
+    physically-counted notes, so an odd amount can make an otherwise-
+    correct day look slightly off."""
+    if not money.is_denomination_valid(amount):
+        flash("Heads up: this amount isn't a multiple of 250 IQD. It'll still save as entered, "
+              "but the Cash Register's end-of-day audit compares against physical notes, so an "
+              "odd amount here can make an otherwise-correct day look slightly off.", "error")
+
+
 @app.route("/refunds")
 @auth.permission_required("manage_refunds")
 def refunds_page():
@@ -4423,7 +4444,7 @@ def refunds_page():
     count_params = [date_filter] if date_filter else []
     total = db.execute(f"SELECT COUNT(*) c FROM refunds{count_where}", count_params).fetchone()["c"]
     refunds = logic.recent_refunds(db, limit=PER_PAGE, offset=page_offset(page), date_filter=date_filter)
-    return render_template("refunds.html", refunds=refunds, today=date.today().isoformat(),
+    return render_template("refunds.html", refunds=refunds, today=date.today().isoformat(), payment_methods=PAYMENT_METHODS,
                             date_filter=date_filter,
                             page=page, total_pages=page_count(total), total_count=total)
 
@@ -4442,6 +4463,10 @@ def refund_retail_save():
     quantities = f.getlist("quantity")
     restock = f.get("restock") == "on"
     reason = (f.get("reason") or "").strip()
+    refund_method = f.get("refund_method")
+    if refund_method not in PAYMENT_METHODS:
+        flash("Pick how this refund was actually paid out: " + ", ".join(PAYMENT_METHODS) + ".", "error")
+        return redirect(url_for("refunds_page"))
     try:
         refund_date = clean_date(f.get("refund_date"), field="refund_date") or date.today().isoformat()
     except BadDate as e:
@@ -4502,9 +4527,9 @@ def refund_retail_save():
     now = datetime.now().isoformat(timespec="seconds")
     rounded_total = money.round_to_denomination(total)
     cur = db.execute(
-        "INSERT INTO refunds (refund_type, refund_date, amount, restocked, sale_id, reason, processed_by, created_at) "
-        "VALUES ('retail',?,?,?,?,?,?,?) RETURNING id",
-        (refund_date, rounded_total, restock, sale_id, reason, session["user_id"], now),
+        "INSERT INTO refunds (refund_type, refund_date, amount, restocked, sale_id, reason, refund_method, processed_by, created_at) "
+        "VALUES ('retail',?,?,?,?,?,?,?,?) RETURNING id",
+        (refund_date, rounded_total, restock, sale_id, reason, refund_method, session["user_id"], now),
     )
     refund_id = cur.fetchone()["id"]
 
@@ -4539,6 +4564,10 @@ def refund_service_save():
         flash("Refund amount must be a valid number.", "error")
         return redirect(url_for("refunds_page"))
     reason = (f.get("reason") or "").strip()
+    refund_method = f.get("refund_method")
+    if refund_method not in PAYMENT_METHODS:
+        flash("Pick how this refund was actually paid out: " + ", ".join(PAYMENT_METHODS) + ".", "error")
+        return redirect(url_for("refunds_page"))
     try:
         refund_date = clean_date(f.get("refund_date"), field="refund_date") or date.today().isoformat()
     except BadDate as e:
@@ -4567,9 +4596,9 @@ def refund_service_save():
     now = datetime.now().isoformat(timespec="seconds")
     rounded_amount = money.round_to_denomination(amount)
     cur = db.execute(
-        "INSERT INTO refunds (refund_type, refund_date, amount, visit_id, inpatient_case_id, reason, processed_by, created_at) "
-        "VALUES ('service',?,?,?,?,?,?,?) RETURNING id",
-        (refund_date, rounded_amount, visit_id, case_id, reason, session["user_id"], now),
+        "INSERT INTO refunds (refund_type, refund_date, amount, visit_id, inpatient_case_id, reason, refund_method, processed_by, created_at) "
+        "VALUES ('service',?,?,?,?,?,?,?,?) RETURNING id",
+        (refund_date, rounded_amount, visit_id, case_id, reason, refund_method, session["user_id"], now),
     )
     refund_id = cur.fetchone()["id"]
     logic.recompute_month_summary(db, logic.month_key(refund_date))
@@ -4577,6 +4606,103 @@ def refund_service_save():
     db.commit()
     flash(f"Service refund of {rounded_amount:,.0f} IQD recorded.", "success")
     return redirect(url_for("refunds_page"))
+
+
+# ---------------------------------------------------------------------------
+# Cash Register — a unified daily view of every place money actually
+# changed hands (POS sales, Visit/Inpatient/Boarding payments, refunds),
+# built for end-of-day cash-up: compare what the system says came in
+# against what's physically in the till. "Pay From Cash Register" logs
+# manual cash leaving the drawer for a reason that isn't a refund (petty
+# cash, paying a supplier directly out of the till). "Perform Audit"
+# records what staff actually counted against the system's Cash total for
+# that day and immutably logs the outcome (Deficit/Surplus/Perfect) — see
+# logic.cash_register_* for the actual math.
+# ---------------------------------------------------------------------------
+@app.route("/cash-register")
+@auth.permission_required("manage_cash_register")
+def cash_register_page():
+    db = get_db()
+    day = request.args.get("date", "").strip() or date.today().isoformat()
+    ledger = logic.cash_register_ledger(db, day)
+    totals = logic.cash_register_totals(db, day)
+    payouts = logic.cash_register_payouts_for_day(db, day)
+    latest_audit = logic.cash_register_latest_audit(db, day)
+    return render_template("cash_register.html", day=day, ledger=ledger, totals=totals,
+                            payouts=payouts, latest_audit=latest_audit, today=date.today().isoformat())
+
+
+@app.route("/cash-register/payout", methods=["POST"])
+@auth.permission_required("manage_cash_register")
+def cash_register_payout_new():
+    db = get_db()
+    f = request.form
+    day = f.get("day") or date.today().isoformat()
+    try:
+        amount = parse_money(f.get("amount"), required=True)
+    except BadNumber:
+        flash("Amount must be a valid number.", "error")
+        return redirect(url_for("cash_register_page", date=day))
+    if amount <= 0:
+        flash("Amount must be greater than 0.", "error")
+        return redirect(url_for("cash_register_page", date=day))
+    reason = (f.get("reason") or "").strip()
+    if not reason:
+        flash("Enter a reason for this payout.", "error")
+        return redirect(url_for("cash_register_page", date=day))
+    cur = db.execute(
+        "INSERT INTO cash_register_payouts (payout_date, amount, reason, logged_by, created_at) "
+        "VALUES (?,?,?,?,?) RETURNING id",
+        (day, amount, reason, session["user_id"], datetime.now().isoformat(timespec="seconds")),
+    )
+    payout_id = cur.fetchone()["id"]
+    auth.log_change(db, "cash_register_payouts", str(payout_id), "create")
+    db.commit()
+    flash(f"{logic.fmt_money(amount)} IQD logged out of the register.", "success")
+    flash_cash_denomination_warning(amount)
+    return redirect(url_for("cash_register_page", date=day))
+
+
+@app.route("/cash-register/audit", methods=["POST"])
+@auth.permission_required("manage_cash_register")
+def cash_register_audit_new():
+    db = get_db()
+    f = request.form
+    day = f.get("day") or date.today().isoformat()
+    try:
+        counted_cash = parse_money(f.get("counted_cash"), required=True)
+    except BadNumber:
+        flash("Counted cash must be a valid number.", "error")
+        return redirect(url_for("cash_register_page", date=day))
+    if counted_cash < 0:
+        flash("Counted cash can't be negative.", "error")
+        return redirect(url_for("cash_register_page", date=day))
+    # Recomputed fresh here, never trusted from the form — same reasoning
+    # as consignment_settlement_new(): this is the figure the audit result
+    # gets permanently compared against, so it has to be the real live
+    # number, not whatever the page happened to show when it was loaded.
+    totals = logic.cash_register_totals(db, day)
+    difference = round(counted_cash - totals["Cash"], 2)
+    if abs(difference) < 1:
+        status = "Perfect"
+    elif difference < 0:
+        status = "Deficit"
+    else:
+        status = "Surplus"
+    cur = db.execute(
+        "INSERT INTO cash_register_audits (audit_date, system_cash, system_card, system_transfer, "
+        "counted_cash, difference, status, notes, performed_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id",
+        (day, totals["Cash"], totals["Card"], totals["Transfer"], counted_cash, difference, status,
+         (f.get("notes") or "").strip() or None, session["user_id"], datetime.now().isoformat(timespec="seconds")),
+    )
+    audit_id = cur.fetchone()["id"]
+    auth.log_change(db, "cash_register_audits", str(audit_id), "create")
+    db.commit()
+    if status == "Perfect":
+        flash(f"Audit recorded for {day}: Perfect — counted cash matches the system exactly.", "success")
+    else:
+        flash(f"Audit recorded for {day}: {status} of {logic.fmt_money(abs(difference))} IQD.", "error")
+    return redirect(url_for("cash_register_page", date=day))
 
 
 @app.route("/reports/opex", methods=["POST"])

@@ -3,6 +3,50 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.4.0] - 2026-08-22
+
+### Added
+- Cash Register: a new page unifying every place money actually changes
+  hands on a given day — POS sales, Visit/Inpatient/Boarding payments,
+  and refunds (netted as negative) — for end-of-day cash-up against
+  what's physically in the till. Shows Cash/Card/Transfer/All totals for
+  the day, plus:
+  - **Pay From Cash Register** — logs manual cash leaving the till for a
+    reason that isn't a refund (petty cash, paying a supplier directly
+    out of the drawer).
+  - **Perform Audit** — compares the system's Cash total against what
+    staff actually counted, and permanently records the result
+    (Deficit/Surplus/Perfect) as an immutable historical entry; a later
+    re-audit of the same day adds a new record rather than overwriting
+    the old one.
+  - Integrated into Insights as a new "Cash Register Health" section —
+    the last 30 days' status at a glance, including days nobody ever
+    audited, so poor documentation (or worse) doesn't hide in a gap.
+  - Refunds now record how the money was actually handed back (Cash /
+    Card / Transfer) — needed to net refunds against the right bucket in
+    the day's totals; shown as a new Method column on the Refunds page.
+  - New "Manage Cash Register" permission, off by default for existing
+    installs' Admin role until this update grants it once.
+
+### Changed
+- Unified "Bank Transfer" and "Transfer" — an old, inconsistent label
+  that had crept into a few free-text payment-method fields (and,
+  briefly, POS sales) — down to the one label the app has always
+  actually used: "Transfer". Existing data is normalized automatically
+  on update.
+
+### Fixed
+- 4 more delete routes (distributor, distributor bill, distributor bill
+  payment, inpatient billing line) could log a "delete" audit entry even
+  when nothing was actually deleted (an already-gone or invalid id) —
+  found during a sweep prompted by the same issue fixed in three other
+  routes last release. All now confirm the record exists first.
+
+### Removed
+- The Sales History end-of-day totals row added in 1.3.0 — superseded by
+  Cash Register, which does the same job correctly across every type of
+  sale, not just POS.
+
 ## [1.3.0] - 2026-08-21
 
 ### Added

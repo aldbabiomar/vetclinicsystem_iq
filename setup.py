@@ -138,6 +138,34 @@ def apply_schema():
 #     "ALTER TABLE sales ADD COLUMN IF NOT EXISTS notes TEXT",
 INCREMENTAL_SCHEMA_STATEMENTS = [
     "ALTER TABLE inventory_list ADD COLUMN IF NOT EXISTS consignment_since TEXT",
+    "ALTER TABLE refunds ADD COLUMN IF NOT EXISTS refund_method TEXT",
+
+    # --- One-time data normalization, not schema — same idempotent-list
+    # mechanism, safe to run on every launch since each statement only
+    # touches rows that still need it. Unifies "Bank Transfer" (an old,
+    # inconsistent label used in a few free-text fields and, briefly, the
+    # POS payment method) down to the one label the rest of the app has
+    # always used: "Transfer".
+    "UPDATE sales SET payment_method='Transfer' WHERE payment_method ILIKE 'bank transfer'",
+    "UPDATE payments SET method='Transfer' WHERE method ILIKE 'bank transfer'",
+    "UPDATE distributor_bill_payments SET method='Transfer' WHERE method ILIKE 'bank transfer'",
+    "UPDATE consignment_settlements SET payment_method='Transfer' WHERE payment_method ILIKE 'bank transfer'",
+
+    # --- Retroactive permission grant, not schema. A brand-new permission
+    # added to auth.PERMISSIONS only reaches a role at the moment that
+    # role is first created (seed_default_roles_and_permissions never
+    # re-grants into an existing role) — so an install whose Admin role
+    # already existed before manage_cash_register was introduced needs it
+    # granted explicitly here, once, or nobody could ever reach the page.
+    "INSERT INTO role_permissions (role_id, permission_id) "
+    "SELECT id, 'manage_cash_register' FROM roles WHERE is_system=true "
+    "ON CONFLICT DO NOTHING",
+    # Mirrors auth.bump_permissions_version() — forces any already-logged-in
+    # session (e.g. an Admin mid-shift when this update lands) to pick up
+    # the newly-granted permission above on its next request, no re-login
+    # required, same as every other in-app permission change.
+    "INSERT INTO settings (key, value) VALUES ('permissions_version', '1') "
+    "ON CONFLICT (key) DO UPDATE SET value = (COALESCE(settings.value, '0')::int + 1)::text",
 ]
 
 

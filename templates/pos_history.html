@@ -31,20 +31,5 @@
 </table>
 </div>
 {% include "_pagination.html" %}
-
-{% if day_totals %}
-<div class="section-title">Totals for {{ date_filter }} — End-of-Day Tally</div>
-<div class="stat-grid" style="grid-template-columns: repeat(4, 1fr);">
-  <div class="stat-card ok"><div class="num">{{ day_totals.Cash|money }}</div><div class="label">Total Cash (IQD)</div></div>
-  <div class="stat-card ok"><div class="num">{{ day_totals.Card|money }}</div><div class="label">Total Card (IQD)</div></div>
-  <div class="stat-card ok"><div class="num">{{ day_totals.Transfer|money }}</div><div class="label">Total Bank Transfer (IQD)</div></div>
-  <div class="stat-card"><div class="num">{{ day_totals.all|money }}</div><div class="label">Total — All Methods (IQD)</div></div>
-</div>
-{% if day_totals.other %}
-<p class="small muted" style="margin-top:-14px;">
-  Plus {{ day_totals.other|money }} IQD recorded under another/unspecified payment method — included in the All Methods total above.
-</p>
-{% endif %}
-{% endif %}
 </div>
 {% endblock %}

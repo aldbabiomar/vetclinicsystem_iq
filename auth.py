@@ -37,6 +37,7 @@ PERMISSIONS = [
     ("view_sales_history", "View Sales History", "Sales & Billing"),
     ("manage_price_list", "Manage Price List", "Sales & Billing"),
     ("manage_refunds", "Manage Refunds", "Sales & Billing"),
+    ("manage_cash_register", "Manage Cash Register", "Sales & Billing"),
     ("view_financial_reports", "View Financial Reports", "Sales & Billing"),
     ("view_insights_retention", "View Insights & Retention", "Sales & Billing"),
     ("manage_users_roles", "Manage Users & Roles", "Admin"),
@@ -56,7 +57,7 @@ PERMISSION_CATEGORIES = ["Patients & Visits", "Inpatient", "Inventory", "Sales &
 # with every permission EXCEPT these, i.e. exactly their current effective
 # access, just now expressed as editable checkboxes.
 ADMIN_ONLY_TODAY = {
-    "manage_price_list", "manage_refunds", "view_financial_reports",
+    "manage_price_list", "manage_refunds", "manage_cash_register", "view_financial_reports",
     "view_insights_retention", "manage_users_roles", "manage_settings",
     "view_logins_changes",
     # Settlement is a cash-handling action against a distributor

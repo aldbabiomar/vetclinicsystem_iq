@@ -77,7 +77,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="field"><label>Payment Date</label><input required type="date" name="payment_date" value="{{ today }}"></div>
     <div class="field"><label>Amount (IQD)</label><input required type="number" step="1" min="1" max="{{ bill.balance|round|int }}" name="amount"></div>
-    <div class="field"><label>Method</label><input name="method" placeholder="Cash, Bank Transfer…"></div>
+    <div class="field"><label>Method</label><input name="method" placeholder="Cash, Transfer…"></div>
     <div class="field full"><label>Notes</label><input name="notes"></div>
     <div class="form-actions"><button class="btn secondary" type="submit">Record Payment</button></div>
   </form>
