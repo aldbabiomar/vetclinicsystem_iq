@@ -3,6 +3,15 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.1.2] - 2026-08-21
+
+### Fixed
+- The "Update Now" / "Rollback to Previous Version" confirmations on
+  Settings used the browser's plain native confirm dialog instead of the
+  app's own styled one. Audited every other popup in the app — everything
+  else already used the styled dialog or modal system consistently; these
+  were the only ones left over from when Updates was first built.
+
 ## [1.1.1] - 2026-08-21
 
 ### Fixed

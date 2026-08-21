@@ -157,13 +157,21 @@ function runUpdateJob(startUrl, startingMessage, successMessagePrefix) {
     .catch(() => window.VZToast.show(startingMessage + ' failed to start.', 'error'));
 }
 
-function applyUpdate() {
-  if (!confirm('This will restart Vetzone IQ for everyone for about 30 seconds. A backup will be taken first. Continue?')) return;
+async function applyUpdate() {
+  const ok = await window.VZDialog.confirm(
+    'This will restart Vetzone IQ for everyone for about 30 seconds. A backup will be taken first. Continue?',
+    { okLabel: 'Update Now', cancelLabel: 'Not Now', originEl: document.getElementById('updApplyBtn') }
+  );
+  if (!ok) return;
   runUpdateJob('/settings/updates/apply', 'Update', 'Update');
 }
 
-function rollbackUpdate() {
-  if (!confirm('This will roll back to the previous version and restart Vetzone IQ for everyone for about 30 seconds. Continue?')) return;
+async function rollbackUpdate() {
+  const ok = await window.VZDialog.confirm(
+    'This will roll back to the previous version and restart Vetzone IQ for everyone for about 30 seconds. Continue?',
+    { okLabel: 'Roll Back', cancelLabel: 'Cancel', originEl: document.getElementById('updRollbackBtn') }
+  );
+  if (!ok) return;
   runUpdateJob('/settings/updates/rollback', 'Rollback', 'Rollback');
 }
 </script>
