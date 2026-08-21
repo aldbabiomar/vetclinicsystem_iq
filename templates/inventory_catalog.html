@@ -52,7 +52,7 @@
   </form>
 </div>
 
-<div class="table-wrap">
+<div class="table-wrap sticky-scroll">
 <table class="inv-table" style="table-layout:fixed; width:100%;">
 <colgroup>
   <col style="width:7%;">
@@ -65,7 +65,7 @@
   <col style="width:11%;">
   <col style="width:14%;">
 </colgroup>
-  <thead><tr><th>ID</th><th>Name</th><th>Category</th><th>Unit</th><th>Barcode</th><th>Track Expiry</th><th class="num-col">Cost (IQD)</th><th>Distributor</th><th></th></tr></thead>
+  <thead class="sticky-header"><tr><th>ID</th><th>Name</th><th>Category</th><th>Unit</th><th>Barcode</th><th>Track Expiry</th><th class="num-col">Cost (IQD)</th><th>Distributor</th><th></th></tr></thead>
   <tbody>
     {% for i in items %}
     <form id="edit-{{ i.id }}" method="post" action="{{ url_for('inventory_catalog_edit', item_id=i.id) }}">

@@ -81,7 +81,7 @@
 </div>
 
 {% if latest_audit %}
-<p class="small muted" style="margin-top:-6px;">
+<p class="small muted" style="margin-top:12px;">
   Last audited {{ latest_audit.created_at[:16] }} by {{ latest_audit.performed_by_name or "—" }} —
   counted {{ latest_audit.counted_cash|money }} IQD cash against a system total of {{ latest_audit.system_cash|money }} IQD
   ({{ latest_audit.difference|money }} IQD difference){% if latest_audit.notes %}: "{{ latest_audit.notes }}"{% endif %}.

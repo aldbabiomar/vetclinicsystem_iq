@@ -10,9 +10,9 @@
   <a class="chip {{ 'active' if not show_all }}" href="{{ url_for('inpatient_list') }}">Currently Admitted</a>
   <a class="chip {{ 'active' if show_all }}" href="{{ url_for('inpatient_list', all=1) }}">All Cases</a>
 </div>
-<div class="table-wrap">
+<div class="table-wrap sticky-scroll">
 <table>
-  <thead><tr><th>Admitted</th><th>Animal</th><th>Owner</th><th>Complaint</th><th>Status</th></tr></thead>
+  <thead class="sticky-header"><tr><th>Admitted</th><th>Animal</th><th>Owner</th><th>Complaint</th><th>Status</th></tr></thead>
   <tbody>
     {% for c in cases %}
     <tr data-row-href="{{ url_for('inpatient_detail', case_id=c.id) }}" tabindex="0" role="link" aria-label="Open {{ c.animal_name }}'s inpatient case">

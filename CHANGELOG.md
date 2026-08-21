@@ -3,6 +3,29 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.4.1] - 2026-08-22
+
+### Added
+- Sticky table headers on every paginated list in the app (and the
+  Retention cohort grid) — the header row now stays pinned in view while
+  you scroll through a long page of results, instead of scrolling away
+  with the rest of the table.
+- Distributor bill payments and consignment settlement payments now use
+  the same Cash/Card/Transfer dropdown as every other payment method
+  field in the app, instead of free text. Visit, Boarding, and Inpatient
+  payments already used this dropdown and were left as-is.
+
+### Fixed
+- The "Grooming" badge on Visits wrapped mid-word ("Groomin"/"g") in a
+  column that was simply too narrow for it and the visit type text
+  together; rebalanced that table's column widths and gave the badge its
+  own line instead of letting it break apart. Swept every other table in
+  the app against the 25-year test dataset for the same pattern — this
+  was the only one affected.
+- Cash Register's "Last audited…" note was rendering with a negative top
+  margin left over from a copy-pasted style, sitting behind the totals
+  table instead of clearly below it.
+
 ## [1.4.0] - 2026-08-22
 
 ### Added

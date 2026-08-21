@@ -11,9 +11,9 @@
   <button class="btn" id="saveChangesBtn" type="button" disabled data-bulk-url="{{ url_for('consignment_items_bulk_edit') }}">Save Changes</button>
 </div>
 
-<div class="table-wrap">
+<div class="table-wrap sticky-scroll">
 <table>
-  <thead><tr>
+  <thead class="sticky-header"><tr>
     <th>ID</th><th>Name</th><th>Consignment?</th><th>Distributor</th><th class="num-col">Cost Price (IQD)</th><th></th>
   </tr></thead>
   <tbody>

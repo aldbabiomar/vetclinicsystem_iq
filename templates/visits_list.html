@@ -22,18 +22,18 @@
   {% if day_filter or search %}<a class="btn secondary" href="{{ url_for('visits_list', sort=sort) }}">Clear Filters</a>{% endif %}
 </form>
 
-<div class="table-wrap">
+<div class="table-wrap sticky-scroll">
 <table class="table-fixed">
   <colgroup>
-    <col style="width:11%"><col style="width:8%"><col style="width:12%"><col style="width:14%">
-    <col style="width:9%"><col style="width:12%"><col style="width:13%"><col style="width:12%"><col style="width:9%">
+    <col style="width:11%"><col style="width:9%"><col style="width:12%"><col style="width:12%">
+    <col style="width:11%"><col style="width:11%"><col style="width:13%"><col style="width:12%"><col style="width:9%">
   </colgroup>
-  <thead><tr><th>Date</th><th>ID</th><th>Animal</th><th>Owner</th><th>Type</th><th>Doctor</th><th>Status</th><th>Payment</th><th class="num-col">Bill (IQD)</th></tr></thead>
+  <thead class="sticky-header"><tr><th>Date</th><th>ID</th><th>Animal</th><th>Owner</th><th>Type</th><th>Doctor</th><th>Status</th><th>Payment</th><th class="num-col">Bill (IQD)</th></tr></thead>
   <tbody>
     {% for v in visits %}
     <tr data-row-href="{{ url_for('visit_detail', visit_id=v.id) }}" tabindex="0" role="link" aria-label="Open {{ v.animal_name }}'s visit">
       <td>{{ v.date or "—" }}</td><td class="muted">{{ v.id }}</td><td><strong>{{ v.animal_name }}</strong></td><td>{{ v.owner_name }}</td>
-      <td>{{ v.visit_type }}{% if v.grooming_needed=='Y' %} <span class="badge primary">Grooming</span>{% endif %}</td>
+      <td>{{ v.visit_type }}{% if v.grooming_needed=='Y' %} <span class="badge primary" style="white-space:nowrap;">Grooming</span>{% endif %}</td>
       <td>{{ v.doctor or "—" }}</td>
       <td><span class="badge {{ 'ok' if v.case_status=='Resolved' else ('danger' if v.case_status=='Deceased/Euthanized' else 'warn') }}">{{ v.case_status }}</span></td>
       <td><span class="badge {{ 'ok' if v.billing.status=='Fully Paid' else ('danger' if v.billing.status=='Unpaid' else 'muted') }}">{{ v.billing.status }}</span></td>

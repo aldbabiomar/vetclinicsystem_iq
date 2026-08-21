@@ -2749,7 +2749,7 @@ def distributor_detail(dist_id):
     if not dist:
         abort(404)
     ledger = logic.distributor_ledger(db, dist_id)
-    return render_template("distributor_detail.html", distributor=dist, **ledger)
+    return render_template("distributor_detail.html", distributor=dist, payment_methods=PAYMENT_METHODS, **ledger)
 
 
 @app.route("/distributors/<dist_id>/bills/new", methods=["POST"])
@@ -3198,7 +3198,8 @@ def consignment_settlements_page(distributor_id):
         "LEFT JOIN users u ON u.id=s.settled_by WHERE s.distributor_id=? ORDER BY s.created_at DESC",
         (distributor_id,),
     ).fetchall()
-    return render_template("consignment_settlements.html", distributor=distributor, balance=balance, history=history)
+    return render_template("consignment_settlements.html", distributor=distributor, balance=balance, history=history,
+                            payment_methods=PAYMENT_METHODS)
 
 
 @app.route("/consignment/settlements/<distributor_id>/new", methods=["POST"])

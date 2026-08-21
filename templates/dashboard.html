@@ -109,9 +109,9 @@
 {% if current_role == 'Admin' %}
 <div id="dashboard-missed-region">
 <div class="section-title">Missed Items — Needs Admin Review <span class="count">{{ missed_total }}</span></div>
-<div class="table-wrap">
+<div class="table-wrap sticky-scroll">
 <table>
-  <thead><tr><th>Type</th><th>Patient</th><th>Deadline Passed</th><th>Responsible Staff</th><th></th></tr></thead>
+  <thead class="sticky-header"><tr><th>Type</th><th>Patient</th><th>Deadline Passed</th><th>Responsible Staff</th><th></th></tr></thead>
   <tbody>
     {% for m in missed %}
     <tr>

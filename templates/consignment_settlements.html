@@ -23,7 +23,12 @@
   <form method="post" action="{{ url_for('consignment_settlement_new', distributor_id=distributor.id) }}" class="form-grid" style="margin-top:16px;" data-confirm="Record this settlement? The amount owed will be recalculated at the moment you submit.">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="field"><label>Amount Paid (IQD)</label><input type="number" step="1" name="amount_paid" value="{{ balance.amount_owed|round|int }}" required></div>
-    <div class="field"><label>Payment Method</label><input name="payment_method" placeholder="Cash, Transfer, ..."></div>
+    <div class="field"><label>Payment Method</label>
+      <select name="payment_method">
+        <option value="">—</option>
+        {% for m in payment_methods %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+      </select>
+    </div>
     <div class="field full"><label>Notes</label><input name="notes"></div>
     <div class="field full">
       <button class="btn" type="submit">Record Settlement</button>

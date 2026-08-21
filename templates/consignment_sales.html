@@ -20,9 +20,9 @@
   {% if distributor_id or date_from or date_to %}<a class="btn secondary" href="{{ url_for('consignment_sales_page') }}">Clear</a>{% endif %}
 </form>
 
-<div class="table-wrap">
+<div class="table-wrap sticky-scroll">
 <table>
-  <thead><tr>
+  <thead class="sticky-header"><tr>
     <th>Month</th><th>Distributor</th><th>Item</th><th class="num-col">Units Sold</th>
     <th class="num-col">Revenue (IQD)</th><th class="num-col">Owed to Distributor (IQD)</th><th class="num-col">Your Markup (IQD)</th>
   </tr></thead>

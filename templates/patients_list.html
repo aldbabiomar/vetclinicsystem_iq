@@ -21,9 +21,9 @@
   {% endfor %}
 </div>
 
-<div class="table-wrap">
+<div class="table-wrap sticky-scroll">
 <table>
-  <thead><tr><th>ID</th><th>Animal</th><th>Species</th><th>Sex</th><th>Owner</th><th>Phone</th></tr></thead>
+  <thead class="sticky-header"><tr><th>ID</th><th>Animal</th><th>Species</th><th>Sex</th><th>Owner</th><th>Phone</th></tr></thead>
   <tbody>
     {% for p in patients %}
     <tr data-row-href="{{ url_for('patient_detail', patient_id=p.id) }}" tabindex="0" role="link" aria-label="Open {{ p.animal_name }}'s patient record">
