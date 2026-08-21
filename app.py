@@ -2892,15 +2892,26 @@ def consignment_items_bulk_edit():
             if has_negative(cost_price):
                 errors[item_id] = "Cost Price can't be negative."
                 continue
-            new_vals = {"ownership_type": "Consignment", "distributor_id": distributor_id, "cost_price": cost_price}
+            consignment_since = (
+                old["consignment_since"] if old["ownership_type"] == "Consignment"
+                else datetime.now().isoformat(timespec="seconds")
+            )
+            new_vals = {
+                "ownership_type": "Consignment", "distributor_id": distributor_id,
+                "cost_price": cost_price, "consignment_since": consignment_since,
+            }
         else:
-            new_vals = {"ownership_type": "Owned", "distributor_id": None, "cost_price": old["cost_price"]}
+            new_vals = {
+                "ownership_type": "Owned", "distributor_id": None,
+                "cost_price": old["cost_price"], "consignment_since": old["consignment_since"],
+            }
         changes = auth.diff_dict(old, new_vals)
         if not changes:
             continue
         db.execute(
-            "UPDATE inventory_list SET ownership_type=?, distributor_id=?, cost_price=? WHERE id=?",
-            (new_vals["ownership_type"], new_vals["distributor_id"], new_vals["cost_price"], item_id),
+            "UPDATE inventory_list SET ownership_type=?, distributor_id=?, cost_price=?, consignment_since=? WHERE id=?",
+            (new_vals["ownership_type"], new_vals["distributor_id"], new_vals["cost_price"],
+             new_vals["consignment_since"], item_id),
         )
         auth.log_change(db, "inventory_list", item_id, "update", changes)
         saved.append(item_id)

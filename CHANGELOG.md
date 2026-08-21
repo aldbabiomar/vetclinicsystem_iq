@@ -3,6 +3,24 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.2.1] - 2026-08-21
+
+### Fixed
+- A distributor's owed balance could include sales that happened before
+  an item was ever flagged Consignment. This was most severe for a
+  brand-new distributor relationship (no receiving logged yet): flagging
+  an item that used to be Retail with years of sales history would
+  immediately show the distributor owed for every sale that item had
+  ever had, none of which were actually theirs. Inventory items now
+  record when they most recently became Consignment
+  (`inventory_list.consignment_since`), and balance calculations floor
+  their sales/refund scan at that date per item, on top of the existing
+  distributor-level floor. Verified against the 25-year synthetic
+  dataset: a newly-flagged item with 3,572 historical sales (267M IQD)
+  now correctly shows 0 owed until it actually sells again as
+  Consignment; an existing distributor's other legitimate Consignment
+  items are unaffected.
+
 ## [1.2.0] - 2026-08-21
 
 ### Added

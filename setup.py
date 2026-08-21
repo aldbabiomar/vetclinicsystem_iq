@@ -136,7 +136,9 @@ def apply_schema():
 #
 # Example:
 #     "ALTER TABLE sales ADD COLUMN IF NOT EXISTS notes TEXT",
-INCREMENTAL_SCHEMA_STATEMENTS = []
+INCREMENTAL_SCHEMA_STATEMENTS = [
+    "ALTER TABLE inventory_list ADD COLUMN IF NOT EXISTS consignment_since TEXT",
+]
 
 
 def apply_incremental_migrations():

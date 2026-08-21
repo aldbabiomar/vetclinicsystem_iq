@@ -208,6 +208,14 @@ CREATE TABLE IF NOT EXISTS inventory_list (
     -- distributor_id, not what the clinic itself paid — same column,
     -- same downstream COGS math, different real-world counterparty.
     ownership_type TEXT NOT NULL DEFAULT 'Owned' CHECK (ownership_type IN ('Owned','Consignment')),
+    -- Set the moment this item most recently flipped Owned -> Consignment
+    -- (app.py's consignment_items_bulk_edit). NULL if it's never been
+    -- Consignment. consignment_balance() (logic.py, §7) floors its sales/
+    -- refund scan at this date per item, on top of the distributor-level
+    -- period_start, so a sale from before the item was actually
+    -- Consignment (e.g. years of prior Retail sales) never gets swept
+    -- into what's owed to a distributor.
+    consignment_since TEXT,
     active BOOLEAN NOT NULL DEFAULT TRUE,
     barcode TEXT UNIQUE,
     -- Which of the two mutually-exclusive ways this item's barcode was set

@@ -2026,6 +2026,15 @@ def consignment_balance(db, distributor_id):
     new settlement should write this call's period_start/period_end
     straight into those columns.
 
+    The sales/refund scan is additionally floored per item at
+    inventory_list.consignment_since (when set) — GREATEST'd against
+    period_start — so a sale from before that specific item was actually
+    flagged Consignment (e.g. years of prior Retail sales on an item that
+    only just got flagged) never counts toward what's owed. Without this,
+    a brand-new distributor with no receiving logged yet has no
+    period_start at all, and every historical sale of a newly-flagged
+    item would be swept in.
+
     Returns a dict: residual, period_start, period_end, new_activity,
     amount_owed, units_sold_since, last_settlement_date.
     """
@@ -2055,11 +2064,11 @@ def consignment_balance(db, distributor_id):
 
     period_end = datetime.now().isoformat(timespec="seconds")
 
-    sold_where = "WHERE i.ownership_type='Consignment' AND i.distributor_id=?"
-    sold_params = [distributor_id]
-    if period_start:
-        sold_where += " AND s.sale_date > ?"
-        sold_params.append(period_start)
+    sold_where = (
+        "WHERE i.ownership_type='Consignment' AND i.distributor_id=? "
+        "AND s.sale_date > GREATEST(?, COALESCE(i.consignment_since, ''))"
+    )
+    sold_params = [distributor_id, period_start or ""]
     sold_row = db.execute(
         "SELECT COALESCE(SUM(si.quantity * COALESCE(si.unit_cost, 0)), 0) AS cost, "
         "COALESCE(SUM(si.quantity), 0) AS units "
@@ -2071,14 +2080,15 @@ def consignment_balance(db, distributor_id):
     units_sold = sold_row["units"] or 0
 
     # refund_date is a DATE column (day precision only) while
-    # period_start is a full timestamp — comparing at day granularity is
-    # the best this data actually supports; see the docstring above.
+    # period_start/consignment_since are full timestamps — comparing at
+    # day granularity is the best this data actually supports; see the
+    # docstring above.
     cost_by_item = {r["id"]: r["cost_price"] or 0 for r in db.execute("SELECT id, cost_price FROM inventory_list").fetchall()}
-    restock_where = "WHERE i.ownership_type='Consignment' AND i.distributor_id=? AND r.restocked=true"
-    restock_params = [distributor_id]
-    if period_start:
-        restock_where += " AND r.refund_date > ?"
-        restock_params.append(period_start[:10])
+    restock_where = (
+        "WHERE i.ownership_type='Consignment' AND i.distributor_id=? AND r.restocked=true "
+        "AND r.refund_date > GREATEST(?::date, COALESCE(i.consignment_since::date, '-infinity'::date))"
+    )
+    restock_params = [distributor_id, period_start[:10] if period_start else "-infinity"]
     restocked_rows = db.execute(
         "SELECT ri.item_id, ri.quantity FROM refund_items ri JOIN refunds r ON r.id=ri.refund_id "
         "JOIN inventory_list i ON i.id = ri.item_id " + restock_where,
