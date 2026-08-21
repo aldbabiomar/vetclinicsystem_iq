@@ -3,6 +3,13 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.1.1] - 2026-08-21
+
+### Fixed
+- The "Updates" section header on Settings sat flush against the "Save
+  Settings" button above it, with none of the spacing every other
+  section header on that page has.
+
 ## [1.1.0] - 2026-08-21
 
 ### Changed
