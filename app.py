@@ -264,6 +264,17 @@ def parse_int(raw, required=False):
         raise BadNumber(raw)
 
 
+def has_negative(*values):
+    """True if any of the given already-parsed numbers (None is fine —
+    skipped, since an absent value isn't a negative one) is below zero.
+    Used to reject negative cost/sale prices, weights, and unit costs at
+    the point of entry — parse_money()/parse_int() already reject NaN/
+    Infinity/non-numeric input, but a plain negative number passes those
+    checks fine, so this is the separate guard for fields where negative
+    is never a valid real-world value."""
+    return any(v is not None and v < 0 for v in values)
+
+
 class BadDate(ValueError):
     """Raised by clean_date() when a submitted date field isn't blank but
     also isn't a valid ISO date — lets the route catch it once and show a
@@ -1559,7 +1570,9 @@ def _create_visit(db, patient_id, f):
     grooming_needed = f.get("grooming_needed", "N")
     grooming_services = ",".join(f.getlist("grooming_services")) if grooming_needed == "Y" else None
     weight_kg = parse_money(f.get("weight_kg"))
-    bcs = parse_money(f.get("bcs"))
+    bcs = parse_int(f.get("bcs"))
+    if has_negative(weight_kg):
+        raise BadNumber(f.get("weight_kg"))
     wellness_next_dose_date = (
         clean_date(f.get("wellness_next_dose_date"), field="wellness_next_dose_date")
         if wellness_needed == "Y" else None
@@ -1686,12 +1699,15 @@ def visit_edit(visit_id):
             edited_followup_date = clean_date(f.get("followup_date"), field="followup_date")
             edited_wellness_next_dose_date = clean_date(f.get("wellness_next_dose_date"), field="wellness_next_dose_date") if wellness_needed == "Y" else None
             edited_weight_kg = parse_money(f.get("weight_kg"))
-            edited_bcs = parse_money(f.get("bcs"))
+            edited_bcs = parse_int(f.get("bcs"))
         except BadDate as e:
             flash(str(e), "error")
             return redirect(url_for("visit_edit", visit_id=visit_id))
         except BadNumber:
             flash("Weight and BCS must be valid numbers.", "error")
+            return redirect(url_for("visit_edit", visit_id=visit_id))
+        if has_negative(edited_weight_kg):
+            flash("Weight can't be negative.", "error")
             return redirect(url_for("visit_edit", visit_id=visit_id))
 
         new_vals = {
@@ -2082,6 +2098,9 @@ def price_list_new():
     except BadNumber:
         flash("Cost Price and Sale Price must be valid numbers.", "error")
         return redirect(url_for("price_list"))
+    if has_negative(cost_price, sale_price):
+        flash("Cost Price and Sale Price can't be negative.", "error")
+        return redirect(url_for("price_list"))
     if f.get("category") not in PRICE_CATEGORIES:
         flash("Category must be one of: " + ", ".join(PRICE_CATEGORIES) + ".", "error")
         return redirect(url_for("price_list"))
@@ -2130,6 +2149,9 @@ def price_list_bulk_edit():
         except BadNumber:
             errors[item_id] = "Cost Price and Sale Price must be valid numbers."
             continue
+        if has_negative(cost_price, sale_price):
+            errors[item_id] = "Cost Price and Sale Price can't be negative."
+            continue
         old = db.execute("SELECT * FROM price_list WHERE id=?", (item_id,)).fetchone()
         if not old:
             errors[item_id] = "Item not found."
@@ -2163,6 +2185,9 @@ def price_list_edit(item_id):
         sale_price = parse_money(f.get("sale_price"))
     except BadNumber:
         flash("Cost Price and Sale Price must be valid numbers.", "error")
+        return redirect(url_for("price_list"))
+    if has_negative(cost_price, sale_price):
+        flash("Cost Price and Sale Price can't be negative.", "error")
         return redirect(url_for("price_list"))
     if f.get("category") not in PRICE_CATEGORIES:
         flash("Category must be one of: " + ", ".join(PRICE_CATEGORIES) + ".", "error")
@@ -2251,6 +2276,9 @@ def inventory_catalog_new():
     except BadNumber:
         flash("Cost Price must be a valid number.", "error")
         return redirect(url_for("inventory_catalog"))
+    if has_negative(cost_price):
+        flash("Cost Price can't be negative.", "error")
+        return redirect(url_for("inventory_catalog"))
     if f.get("category", "Medical") not in INVENTORY_CATEGORIES:
         flash("Category must be one of: " + ", ".join(INVENTORY_CATEGORIES) + ".", "error")
         return redirect(url_for("inventory_catalog"))
@@ -2294,6 +2322,9 @@ def inventory_catalog_bulk_edit():
         except BadNumber:
             errors[item_id] = "Cost Price must be a valid number."
             continue
+        if has_negative(cost_price):
+            errors[item_id] = "Cost Price can't be negative."
+            continue
         old = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
         if not old:
             errors[item_id] = "Item not found."
@@ -2326,6 +2357,9 @@ def inventory_catalog_edit(item_id):
         cost_price = parse_money(f.get("cost_price"))
     except BadNumber:
         flash("Cost Price must be a valid number.", "error")
+        return redirect(url_for("inventory_catalog"))
+    if has_negative(cost_price):
+        flash("Cost Price can't be negative.", "error")
         return redirect(url_for("inventory_catalog"))
     if f.get("category", "Medical") not in INVENTORY_CATEGORIES:
         flash("Category must be one of: " + ", ".join(INVENTORY_CATEGORIES) + ".", "error")
@@ -2567,6 +2601,24 @@ def distributor_edit(dist_id):
 @auth.permission_required("manage_distributors")
 def distributor_delete(dist_id):
     db = get_db()
+    # A distributor can be referenced from six tables (inventory items,
+    # manual ledger bills, and every Consignment table) — a bare DELETE
+    # would just crash with a raw ForeignKeyViolation the moment any of
+    # them has a row, same failure mode admin_role_delete() already
+    # guards against for roles. Check first and name what's still linked,
+    # rather than let Postgres reject it as an unhandled 500.
+    still_linked = []
+    for label, table in [
+        ("inventory item(s)", "inventory_list"), ("distributor bill(s)", "distributor_bills"),
+        ("consignment receipt(s)", "consignment_receipts"), ("consignment shrinkage entry/entries", "consignment_shrinkage"),
+        ("consignment return(s)", "consignment_returns"), ("consignment settlement(s)", "consignment_settlements"),
+    ]:
+        if db.execute(f"SELECT 1 FROM {table} WHERE distributor_id=? LIMIT 1", (dist_id,)).fetchone():
+            still_linked.append(label)
+    if still_linked:
+        flash("Can't delete this distributor — it still has " + ", ".join(still_linked) +
+              " linked to it. Remove or reassign those first.", "error")
+        return redirect(url_for("distributors_list"))
     db.execute("DELETE FROM distributors WHERE id=?", (dist_id,))
     auth.log_change(db, "distributors", dist_id, "delete")
     db.commit()
@@ -2826,6 +2878,9 @@ def consignment_receiving_new():
         return redirect(url_for("consignment_receiving_page"))
     if quantity <= 0:
         flash("Quantity must be greater than 0.", "error")
+        return redirect(url_for("consignment_receiving_page"))
+    if has_negative(unit_cost):
+        flash("Unit Cost can't be negative.", "error")
         return redirect(url_for("consignment_receiving_page"))
     try:
         received_date = clean_date(f.get("received_date"), field="received_date") or date.today().isoformat()
@@ -3615,13 +3670,16 @@ def inpatient_new():
         f = request.form
         try:
             new_weight_kg = parse_money(f.get("weight_kg"))
-            new_bcs = parse_money(f.get("bcs"))
+            new_bcs = parse_int(f.get("bcs"))
             new_admission_date = clean_date(f.get("admission_date"), field="admission_date")
         except BadNumber:
             flash("Weight and BCS must be valid numbers.", "error")
             return redirect(url_for("inpatient_new"))
         except BadDate as e:
             flash(str(e), "error")
+            return redirect(url_for("inpatient_new"))
+        if has_negative(new_weight_kg):
+            flash("Weight can't be negative.", "error")
             return redirect(url_for("inpatient_new"))
         case_id = _create_inpatient_case(db, f["patient_id"], None, f.get("complaint"), new_admission_date,
                                           new_weight_kg, new_bcs)
@@ -3673,9 +3731,12 @@ def inpatient_edit(case_id):
     try:
         edited_dismissal_date = clean_date(f.get("dismissal_date"), field="dismissal_date") if dismissed else None
         edited_weight_kg = parse_money(f.get("weight_kg"))
-        edited_bcs = parse_money(f.get("bcs"))
+        edited_bcs = parse_int(f.get("bcs"))
     except (BadDate, BadNumber) as e:
         flash(str(e) if isinstance(e, BadDate) else "Weight and BCS must be valid numbers.", "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
+    if has_negative(edited_weight_kg):
+        flash("Weight can't be negative.", "error")
         return redirect(url_for("inpatient_detail", case_id=case_id))
     new_vals = {
         "complaint": f.get("complaint"), "exam_findings": f.get("exam_findings"),
