@@ -3,6 +3,22 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.4.3] - 2026-08-22
+
+### Added
+- Appointments now has a "need attention" list for bookings that stopped
+  matching anything on the day grid — a vet was deactivated, or the
+  scheduling hours/slot length changed since the appointment was booked.
+  These were still valid rows in the database but had no UI path to find
+  or cancel them; this list is the guaranteed fallback regardless of
+  what caused the mismatch, with a Cancel action right on it. Deactivating
+  a vet or changing the scheduling settings now also warns immediately if
+  it just orphaned any upcoming bookings.
+- Inpatient Cases has a new "Balance Due" filter: discharged cases that
+  still owe money (e.g. a procedure billed after the patient already went
+  home). Previously nothing ever resurfaced a case like this for
+  collection once it dropped off the default admitted-only view.
+
 ## [1.4.2] - 2026-08-22
 
 ### Fixed

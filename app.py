@@ -922,6 +922,15 @@ def admin_user_toggle(user_id):
     auth.log_change(db, "users", user_id, "update", {"active": (row["active"], new_val)})
     db.commit()
     flash("User updated.", "success")
+    if new_val is False:
+        future_appts = db.execute(
+            "SELECT COUNT(*) c FROM appointments WHERE resource_type='vet' AND resource_id=? AND appt_date >= ?",
+            (user_id, date.today().isoformat()),
+        ).fetchone()["c"]
+        if future_appts:
+            flash(f"Heads up: {future_appts} upcoming appointment(s) were booked against this person — "
+                  f"they won't show on the Appointments grid anymore. Check Appointments for the "
+                  f"\"need attention\" list to reschedule them.", "error")
     return redirect(url_for("admin_users"))
 
 
@@ -3891,16 +3900,33 @@ def pos_history():
 def inpatient_list():
     db = get_db()
     show_all = request.args.get("all") == "1"
+    # Discharged cases drop off the two views above by design (dismissed=
+    # false), so a charge added *after* discharge (a forgotten procedure
+    # billed late) has no natural collection point — nothing ever
+    # resurfaces that case for staff to notice the balance and follow up.
+    # This view exists specifically to close that gap: any discharged
+    # case still owing money, regardless of why.
+    balance_due = request.args.get("view") == "balance_due"
     page = get_page()
-    count_where = "" if show_all else " WHERE dismissed=false"
-    total = db.execute(f"SELECT COUNT(*) c FROM inpatient_cases{count_where}").fetchone()["c"]
-    q = ("SELECT c.*, p.animal_name, o.name as owner_name FROM inpatient_cases c "
-         "JOIN patients p ON p.id=c.patient_id JOIN owners o ON o.id=p.owner_id")
-    if not show_all:
-        q += " WHERE c.dismissed=false"
-    q += " ORDER BY c.admission_date DESC LIMIT ? OFFSET ?"
-    cases = db.execute(q, (PER_PAGE, page_offset(page))).fetchall()
-    return render_template("inpatient_list.html", cases=cases, show_all=show_all,
+    if balance_due:
+        paid_join = ("LEFT JOIN (SELECT inpatient_case_id, SUM(amount) AS paid FROM payments "
+                     "GROUP BY inpatient_case_id) pay ON pay.inpatient_case_id = c.id")
+        where = " WHERE c.dismissed=true AND c.total > COALESCE(pay.paid, 0)"
+        total = db.execute(f"SELECT COUNT(*) c FROM inpatient_cases c {paid_join}{where}").fetchone()["c"]
+        q = (f"SELECT c.*, p.animal_name, o.name as owner_name, COALESCE(pay.paid, 0) AS paid "
+             f"FROM inpatient_cases c JOIN patients p ON p.id=c.patient_id JOIN owners o ON o.id=p.owner_id "
+             f"{paid_join}{where} ORDER BY c.admission_date DESC LIMIT ? OFFSET ?")
+        cases = db.execute(q, (PER_PAGE, page_offset(page))).fetchall()
+    else:
+        count_where = "" if show_all else " WHERE dismissed=false"
+        total = db.execute(f"SELECT COUNT(*) c FROM inpatient_cases{count_where}").fetchone()["c"]
+        q = ("SELECT c.*, p.animal_name, o.name as owner_name FROM inpatient_cases c "
+             "JOIN patients p ON p.id=c.patient_id JOIN owners o ON o.id=p.owner_id")
+        if not show_all:
+            q += " WHERE c.dismissed=false"
+        q += " ORDER BY c.admission_date DESC LIMIT ? OFFSET ?"
+        cases = db.execute(q, (PER_PAGE, page_offset(page))).fetchall()
+    return render_template("inpatient_list.html", cases=cases, show_all=show_all, balance_due=balance_due,
                             page=page, total_pages=page_count(total), total_count=total)
 
 
@@ -4221,9 +4247,10 @@ def appointments_page():
     prev_week = (days[0] - timedelta(days=7)).isoformat()
     next_week = (days[0] + timedelta(days=7)).isoformat()
     has_vet_columns = any(c["resource_type"] == "vet" for c in columns)
+    orphaned = logic.orphaned_appointments(db)
     return render_template("appointments.html", days=days, selected_day=selected_day, columns=columns,
                             grid=grid, week_anchor=week_anchor, prev_week=prev_week, next_week=next_week,
-                            today_iso=today_iso, has_vet_columns=has_vet_columns)
+                            today_iso=today_iso, has_vet_columns=has_vet_columns, orphaned=orphaned)
 
 
 @app.route("/appointments/new", methods=["POST"])
@@ -4858,6 +4885,14 @@ def settings_page():
         if start and end and start >= end:
             flash("Day Ends At must be after Day Starts At.", "error")
             return redirect(url_for("settings_page"))
+        # Snapshot before the change — appt_start_time/appt_end_time/
+        # appt_slot_minutes feed generate_slots(), which day_grid() (and
+        # logic.orphaned_appointments()) key every appointment's slot_label
+        # against. Comparing the orphaned count before/after this save is
+        # how we know whether *this specific change* just stranded any
+        # existing bookings, without hand-duplicating the slot-generation
+        # logic here to simulate it separately.
+        orphaned_before = len(logic.orphaned_appointments(db))
         for key in ["clinic_name", "clinic_location", "audit_overdue_days", "expiry_soon_days", "opening_date",
                     "appt_start_time", "appt_end_time", "appt_slot_minutes",
                     "backup_dir", "backup_time", "backup_retention"]:
@@ -4875,6 +4910,11 @@ def settings_page():
             import scheduler
             scheduler.reschedule(request.form.get("backup_time"))
         flash("Settings saved.", "success")
+        newly_orphaned = len(logic.orphaned_appointments(db)) - orphaned_before
+        if newly_orphaned > 0:
+            flash(f"Heads up: changing the scheduling hours/slot length just made {newly_orphaned} upcoming "
+                  f"appointment(s) stop matching a slot on the grid. They're still booked — check "
+                  f"Appointments for the \"need attention\" list to reschedule them.", "error")
         return redirect(url_for("settings_page"))
     rows = db.execute("SELECT * FROM settings").fetchall()
     settings = {r["key"]: r["value"] for r in rows}

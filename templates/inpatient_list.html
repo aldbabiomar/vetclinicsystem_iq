@@ -2,25 +2,28 @@
 {% block title %}Inpatient Cases — {{ clinic_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><h1>Inpatient Cases</h1><p class="page-sub">Patients currently admitted for boarding or ongoing treatment. Use "All Cases" to include discharged patients. {{ total_count }} shown.</p></div>
+  <div><h1>Inpatient Cases</h1><p class="page-sub">Patients currently admitted for boarding or ongoing treatment. Use "All Cases" to include discharged patients, or "Balance Due" for discharged cases still owing money (e.g. a procedure billed after the patient already left). {{ total_count }} shown.</p></div>
   <a class="btn" href="{{ url_for('inpatient_new') }}">+ Admit Patient</a>
 </div>
 <div id="inpatient-list-region">
 <div class="filter-chips">
-  <a class="chip {{ 'active' if not show_all }}" href="{{ url_for('inpatient_list') }}">Currently Admitted</a>
-  <a class="chip {{ 'active' if show_all }}" href="{{ url_for('inpatient_list', all=1) }}">All Cases</a>
+  <a class="chip {{ 'active' if not show_all and not balance_due }}" href="{{ url_for('inpatient_list') }}">Currently Admitted</a>
+  <a class="chip {{ 'active' if show_all and not balance_due }}" href="{{ url_for('inpatient_list', all=1) }}">All Cases</a>
+  <a class="chip {{ 'active' if balance_due }}" href="{{ url_for('inpatient_list', view='balance_due') }}">Balance Due</a>
 </div>
 <div class="table-wrap sticky-scroll">
 <table>
-  <thead class="sticky-header"><tr><th>Admitted</th><th>Animal</th><th>Owner</th><th>Complaint</th><th>Status</th></tr></thead>
+  <thead class="sticky-header"><tr><th>Admitted</th><th>Animal</th><th>Owner</th><th>Complaint</th><th>Status</th>
+    {% if balance_due %}<th class="num-col">Balance (IQD)</th>{% endif %}</tr></thead>
   <tbody>
     {% for c in cases %}
     <tr data-row-href="{{ url_for('inpatient_detail', case_id=c.id) }}" tabindex="0" role="link" aria-label="Open {{ c.animal_name }}'s inpatient case">
       <td>{{ c.admission_date }}</td><td><strong>{{ c.animal_name }}</strong></td><td>{{ c.owner_name }}</td>
       <td>{{ c.complaint or "—" }}</td>
       <td><span class="badge {{ 'ok' if c.dismissed else 'warn' }}">{{ 'Discharged' if c.dismissed else 'Admitted' }}</span></td>
+      {% if balance_due %}<td class="num-col">{{ (c.total - c.paid)|money }}</td>{% endif %}
     </tr>
-    {% else %}<tr><td colspan="5" class="empty-note">No inpatient cases.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="{{ 6 if balance_due else 5 }}" class="empty-note">{{ "No discharged cases with a balance due." if balance_due else "No inpatient cases." }}</td></tr>{% endfor %}
   </tbody>
 </table>
 </div>
