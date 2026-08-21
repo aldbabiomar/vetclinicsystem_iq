@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}{{ visit.id }} — {{ clinic_name }}{% endblock %}
+{% block content %}
+{% include "_back_link.html" %}
+<div class="page-head">
+  <div>
+    <h1>{{ visit.animal_name }} <span class="muted" style="font-weight:400;font-size:16px;">— {{ visit.date }}</span></h1>
+    <p class="page-sub">{{ visit.id }} · Owner: {{ visit.owner_name }}{% if visit.owner_phone %} ({{ visit.owner_phone }}){% endif %}</p>
+  </div>
+  <div style="display:flex; gap:10px;">
+    <a class="btn secondary" href="{{ url_for('visit_export_pdf', visit_id=visit.id) }}">Export Visit (PDF)</a>
+    <a class="btn secondary" href="{{ url_for('visit_edit', visit_id=visit.id) }}">Edit Visit</a>
+  </div>
+</div>
+
+<div class="panel-grid" style="margin-bottom:20px;">
+  <div class="card">
+    <div class="section-title" style="margin-top:0;">Case</div>
+    <div class="detail-grid">
+      <div class="detail-item"><div class="k">Visit Type</div><div class="v">{{ visit.visit_type }}</div></div>
+      <div class="detail-item"><div class="k">Doctor</div><div class="v">{{ visit.doctor or "—" }}</div></div>
+      <div class="detail-item"><div class="k">Weight</div><div class="v">{{ (visit.weight_kg ~ " kg") if visit.weight_kg is not none else "—" }}</div></div>
+      <div class="detail-item"><div class="k">BCS</div><div class="v">{{ (visit.bcs ~ "/9") if visit.bcs is not none else "—" }}</div></div>
+      <div class="detail-item"><div class="k">Case Status</div><div class="v"><span class="badge {{ 'ok' if visit.case_status=='Resolved' else ('danger' if visit.case_status=='Deceased/Euthanized' else 'warn') }}">{{ visit.case_status }}</span></div></div>
+    </div>
+    <div class="detail-item"><div class="k">Presenting Complaint</div><div class="v">{{ visit.complaint or "—" }}</div></div>
+    <div class="detail-item"><div class="k">History</div><div class="v">{{ visit.history or "—" }}</div></div>
+    <div class="detail-item"><div class="k">Physical Exam &amp; Diagnostics</div><div class="v">{{ visit.exam or "—" }}</div></div>
+    <div class="detail-item"><div class="k">Treatment Plan</div><div class="v">{{ visit.treatment or "—" }}</div></div>
+    <div class="detail-item"><div class="k">Updates Log</div><div class="v updates-log">{{ visit.updates_log or "—" }}</div></div>
+
+    <div style="margin-top:10px;">
+      <button class="btn small secondary" type="button" aria-expanded="false" aria-controls="uploadBox" onclick="var b=document.getElementById('uploadBox'); var open = b.style.display!=='none'; b.style.display = open ? 'none' : 'block'; this.setAttribute('aria-expanded', String(!open));">Additional Tests / X-Rays</button>
+      <span class="small muted">({{ files|length }} file(s) on record)</span>
+    </div>
+    <div id="uploadBox" style="display:none; margin-top:10px; padding-top:10px; border-top:1px solid var(--line);">
+      {% for file in files %}
+      <div class="list-line">
+        <a href="{{ url_for('serve_attachment', relpath=file.relative_path) }}" target="_blank">{{ file.original_name }}</a>
+        <span style="display:flex; align-items:center; gap:8px;">
+          <span class="meta">{{ file.uploaded_at[:10] }}</span>
+          <form method="post" action="{{ url_for('attachment_delete', attachment_id=file.id) }}" style="display:inline;" data-confirm="Delete {{ file.original_name }}? This removes the file permanently, including the copy on disk.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn small danger" type="submit" title="Delete {{ file.original_name }}" aria-label="Delete {{ file.original_name }}">×</button>
+          </form>
+        </span>
+      </div>
+      {% else %}<div class="empty-note">No files uploaded yet.</div>{% endfor %}
+      <form method="post" action="{{ url_for('visit_attachment_upload', visit_id=visit.id) }}" enctype="multipart/form-data" style="margin-top:10px; display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="file" name="file" accept=".pdf,.jpg,.jpeg" required>
+        <button class="btn small" type="submit">Upload</button>
+        <button class="btn small secondary" type="button" onclick="document.getElementById('uploadBox').style.display='none';">Close</button>
+      </form>
+    </div>
+  </div>
+
+  <div>
+    {% if visit.followup_needed == 'Y' %}
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-top:0;">Follow-Up</div>
+      <div class="detail-grid">
+        <div class="detail-item"><div class="k">Method</div><div class="v">{{ visit.followup_method or "—" }}</div></div>
+        <div class="detail-item"><div class="k">Reason</div><div class="v">{{ visit.followup_reason or "—" }}</div></div>
+        <div class="detail-item"><div class="k">Date</div><div class="v">{{ visit.followup_date or "—" }}</div></div>
+        <div class="detail-item"><div class="k">Status</div><div class="v"><span class="badge {{ 'warn' if visit.followup_status=='Pending' else 'ok' }}">{{ visit.followup_status }}</span></div></div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if visit.wellness_needed == 'Y' %}
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-top:0;">Wellness Reminder</div>
+      <div class="detail-grid">
+        <div class="detail-item"><div class="k">Type</div><div class="v">{{ visit.wellness_type or "—" }}</div></div>
+        <div class="detail-item"><div class="k">Next Dose Date</div><div class="v">{{ visit.wellness_next_dose_date or "—" }}</div></div>
+        <div class="detail-item"><div class="k">Contacted</div><div class="v">{{ visit.wellness_contacted }}</div></div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if visit.grooming_needed == 'Y' %}
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-top:0;">Grooming</div>
+      <div class="detail-item"><div class="k">Services</div><div class="v">{{ visit.grooming_services or "—" }}</div></div>
+      <div class="detail-item"><div class="k">Admitted Items</div><div class="v">{{ visit.grooming_admitted_items or "—" }}</div></div>
+      <div class="detail-item"><div class="k">Status</div><div class="v"><span class="badge {{ 'ok' if visit.grooming_status=='Finished' else 'warn' }}">{{ visit.grooming_status or "Waiting" }}</span></div></div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="section-title" style="margin-top:0;">Billing</div>
+      <form method="post" action="{{ url_for('visit_billing_save', visit_id=visit.id) }}" id="billingForm">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div style="display:flex; gap:16px; margin-bottom:12px;">
+          <label class="checkbox-row small" style="text-transform:none; font-weight:500;">
+            <input type="radio" name="billing_type" value="Automatic" onchange="toggleBillingType()" id="btAuto" {{ 'checked' if not billing or billing.billing_type=='Automatic' }}> Automatic Calculation
+          </label>
+          <label class="checkbox-row small" style="text-transform:none; font-weight:500;">
+            <input type="radio" name="billing_type" value="Manual" onchange="toggleBillingType()" id="btManual" {{ 'checked' if billing and billing.billing_type=='Manual' }}> Manual Entry
+          </label>
+        </div>
+        <div id="autoFields" class="field full" style="margin-bottom:12px;">
+          <label>Add Billed Items</label>
+          <input type="text" id="visitBillSearch" autocomplete="off"
+                 placeholder="Search by service, medicine, or item name…">
+          <div id="visitBillResults"></div>
+          <div id="visitBillCart" style="margin-top:10px;"></div>
+          <div id="visitBillFieldsHidden"></div>
+        </div>
+        <div id="manualFields" class="field full" style="margin-bottom:12px;">
+          <label>Billed Amount (IQD) — Exported as "Veterinary Services"</label>
+          <input type="number" step="1" name="manual_amount" value="{{ billing.manual_amount if billing and billing.manual_amount else '' }}">
+        </div>
+        <div class="field full" style="margin-bottom:12px;"><label>Date Billed</label><input type="date" name="date_billed" value="{{ billing.date_billed if billing else visit.date }}"></div>
+        <div class="field full" style="margin-bottom:14px;"><label>Notes</label><input name="notes" value="{{ billing.notes if billing else '' }}"></div>
+        <button class="btn small" type="submit" onclick="return prepareBillingSubmit()">Save Billing</button>
+      </form>
+
+      <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line);">
+        {% for l in summary.lines %}<div class="list-line"><div>{{ l.name }}{% if l.quantity and l.quantity != 1 %} × {{ l.quantity|round(2) }}{% endif %}</div><div>{{ (l.line_total if l.line_total is defined else l.price)|money }} IQD</div></div>{% endfor %}
+        <div class="detail-item" style="margin-top:8px;"><div class="k">Subtotal</div><div class="v">{{ summary.subtotal|money }} IQD</div></div>
+        <form method="post" action="{{ url_for('visit_discount_save', visit_id=visit.id) }}" style="display:flex; gap:8px; align-items:flex-end; margin:8px 0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="field" style="flex:1;"><label>Discount % (Max {{ discount_cap }}%)</label><input type="number" step="1" max="{{ discount_cap }}" min="0" name="discount_percent" value="{{ summary.discount_percent }}"></div>
+          <button class="btn small secondary" type="submit">Apply</button>
+        </form>
+        <div class="detail-item"><div class="k">Total</div><div class="v" style="font-size:20px; font-weight:700;">{{ summary.total|money }} IQD</div></div>
+        <div class="detail-item"><div class="k">Paid</div><div class="v">{{ summary.paid|money }} IQD</div></div>
+        <span class="badge {{ 'ok' if summary.status=='Fully Paid' else ('danger' if summary.status=='Unpaid' else 'muted') }}">{{ summary.status }}</span>
+      </div>
+
+      <form method="post" action="{{ url_for('visit_payment_add', visit_id=visit.id) }}" style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line); display:flex; gap:8px; align-items:flex-end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="field" style="flex:1;"><label>Record Payment (IQD)</label><input type="number" step="1" name="amount" required></div>
+        <div class="field"><label>Method</label><select name="method"><option>Cash</option><option>Card</option><option>Transfer</option></select></div>
+        <button class="btn small secondary" type="submit">Add</button>
+      </form>
+      {% if payments %}
+      <div style="margin-top:10px;">
+        {% for p in payments %}<div class="list-line small"><div>{{ p.date }} — {{ p.method }}</div><div>{{ p.amount|money }} IQD</div></div>{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleBillingType() {
+  const auto = document.getElementById('btAuto').checked;
+  document.getElementById('autoFields').style.display = auto ? 'flex' : 'none';
+  document.getElementById('manualFields').style.display = auto ? 'none' : 'flex';
+}
+toggleBillingType();
+
+// Same search → add-to-cart pattern as pos.html, adapted to post
+// price_id/qty_{id} hidden fields into the existing #billingForm instead
+// of a separate checkout endpoint. Prefilled from summary.lines (the
+// visit_billing_lines snapshot) so an existing Automatic bill shows its
+// current items when the page opens — this replaces what the old
+// billing.codes text-field prefill used to do.
+let visitBillCart = [
+  {% if not billing or billing.billing_type == 'Automatic' %}
+  {% for l in summary.lines %}{ id: {{ l.id|tojson }}, name: {{ l.name|tojson }}, price: {{ l.price|tojson }}, qty: {{ (l.quantity if l.quantity is defined else 1)|tojson }} },{% endfor %}
+  {% endif %}
+];
+
+const visitBillSearchInput = document.getElementById('visitBillSearch');
+const visitBillResultsDiv = document.getElementById('visitBillResults');
+let visitBillDebounce;
+
+visitBillSearchInput.addEventListener('input', () => {
+  clearTimeout(visitBillDebounce);
+  const q = visitBillSearchInput.value.trim();
+  if (!q) { visitBillResultsDiv.innerHTML = ''; return; }
+  visitBillDebounce = setTimeout(() => {
+    fetch(`/api/price-list/lookup?q=${encodeURIComponent(q)}&category=Service&category=Medicine`)
+      .then(r => r.json())
+      .then(list => {
+        if (!list.length) { visitBillResultsDiv.innerHTML = '<div class="empty-note">No matches.</div>'; return; }
+        window.__visitBillResults = list;
+        visitBillResultsDiv.innerHTML = list.map((i, idx) =>
+          `<div class="list-line" style="cursor:pointer;" data-idx="${idx}" onclick="addToVisitBillCart(window.__visitBillResults[this.dataset.idx])">
+             <div class="who">${escapeHtml(i.name)}</div><div class="meta">${i.category} · ${i.price != null ? i.price + ' IQD' : 'no price set'}</div>
+           </div>`
+        ).join('');
+      })
+      .catch(() => { visitBillResultsDiv.innerHTML = '<div class="empty-note">Could not search the Price List; check server connection.</div>'; });
+  }, 200);
+});
+
+function addToVisitBillCart(item) {
+  if (item.price == null) { window.VZToast.show(item.name + ' has no sale price set in the Price List.', 'error'); return; }
+  const existing = visitBillCart.find(c => c.id === item.id);
+  if (existing) { existing.qty += 1; } else { visitBillCart.push({id: item.id, name: item.name, price: item.price, qty: 1}); }
+  visitBillSearchInput.value = '';
+  visitBillResultsDiv.innerHTML = '';
+  renderVisitBillCart();
+}
+function changeVisitBillQty(id, delta) {
+  const line = visitBillCart.find(c => c.id === id);
+  line.qty = Math.max(1, line.qty + delta);
+  renderVisitBillCart();
+}
+function setVisitBillQty(id, value) {
+  const line = visitBillCart.find(c => c.id === id);
+  let qty = parseFloat(value);
+  if (!Number.isFinite(qty) || qty <= 0) qty = 1;
+  line.qty = qty;
+  renderVisitBillCart();
+}
+function removeVisitBillLine(id) {
+  visitBillCart = visitBillCart.filter(c => c.id !== id);
+  renderVisitBillCart();
+}
+function renderVisitBillCart() {
+  const cartDiv = document.getElementById('visitBillCart');
+  if (!visitBillCart.length) { cartDiv.innerHTML = '<div class="empty-note">No items added yet.</div>'; return; }
+  cartDiv.innerHTML = visitBillCart.map(c => `
+    <div class="pos-cart-line">
+      <div>${escapeHtml(c.name)}<div class="meta small">${c.price} IQD each</div></div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button class="btn small secondary" type="button" onclick="changeVisitBillQty('${c.id}',-1)">-</button>
+        <input type="number" min="1" value="${c.qty}" style="width:56px; text-align:center;" onchange="setVisitBillQty('${c.id}', this.value)">
+        <button class="btn small secondary" type="button" onclick="changeVisitBillQty('${c.id}',1)">+</button>
+        <button class="btn small danger" type="button" onclick="removeVisitBillLine('${c.id}')">×</button>
+      </div>
+    </div>`).join('');
+}
+renderVisitBillCart();
+
+function prepareBillingSubmit() {
+  if (document.getElementById('btAuto').checked) {
+    if (!visitBillCart.length) { window.VZToast.show('Add at least one billed item.', 'error'); return false; }
+    const container = document.getElementById('visitBillFieldsHidden');
+    container.innerHTML = '';
+    visitBillCart.forEach(c => {
+      container.innerHTML += `<input type="hidden" name="price_id" value="${c.id}"><input type="hidden" name="qty_${c.id}" value="${c.qty}">`;
+    });
+  }
+  return true;
+}
+</script>
+{% endblock %}

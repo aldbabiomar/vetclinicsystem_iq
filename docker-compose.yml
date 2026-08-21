@@ -1,0 +1,25 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: vetzone_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vetzone
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vetzone_local_password}
+      POSTGRES_DB: vetzone
+    ports:
+      # Bound only to localhost — the app connects locally; other devices on
+      # the clinic WiFi keep talking to the Flask app on port 5050 as before,
+      # never directly to the database.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - vetzone_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vetzone -d vetzone"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  vetzone_pgdata:
+    name: vetzone_pgdata

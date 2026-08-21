@@ -1,0 +1,4642 @@
+import os
+import re
+import math
+import socket
+import logging
+import logging.handlers
+import traceback
+import uuid
+import signal
+import sys
+import ipaddress
+import time
+from datetime import date, datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from dotenv import load_dotenv
+load_dotenv()
+
+from flask import (
+    Flask, render_template, request, redirect, url_for, flash, g, jsonify,
+    session, send_from_directory, send_file, abort
+)
+from flask_wtf import CSRFProtect
+from werkzeug.exceptions import HTTPException
+
+import logic
+import auth
+import db as dbmod
+import barcode as barcode_mod
+import attachments as attach_mod
+import jobs
+import pdf_export
+import money
+
+BASE_DIR = os.path.dirname(__file__)
+_version_path = os.path.join(BASE_DIR, "VERSION")
+VERSION = open(_version_path).read().strip() if os.path.exists(_version_path) else "unknown"
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY")
+if not app.secret_key:
+    raise SystemExit(
+        "SECRET_KEY is not set. Copy .env.example to .env (setup.py does this "
+        "for you) before starting the app."
+    )
+csrf = CSRFProtect(app)
+
+# ---------------------------------------------------------------------------
+# Network/session hardening — this app binds to every interface on the LAN
+# by default (see serve() at the bottom of this file), which is fine for a
+# single-clinic deployment as long as it's paired with real compensating
+# controls. None of this changes default behavior for an operator who
+# doesn't configure anything: every knob below is opt-in via environment
+# variable, same as .env.example already does for SECRET_KEY etc.
+# ---------------------------------------------------------------------------
+
+# If a reverse proxy (nginx/Caddy/etc) is terminating TLS in front of this
+# app, set BEHIND_TLS_PROXY=1 so Flask (a) trusts the proxy's
+# X-Forwarded-For/X-Forwarded-Proto/X-Forwarded-Host headers for the real
+# client IP and scheme instead of the proxy's own, and (b) marks the
+# session cookie Secure (browsers refuse to send Secure cookies over plain
+# HTTP, so this must stay off for a plain-HTTP LAN deployment — Waitress
+# itself doesn't terminate TLS, by its own design, so TLS here always means
+# "there's a reverse proxy in front", never "pass Waitress a certificate").
+BEHIND_TLS_PROXY = os.environ.get("BEHIND_TLS_PROXY") == "1"
+if BEHIND_TLS_PROXY:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+# Explicit session cookie policy (previously unset, relying entirely on
+# Flask's framework defaults with no visibility into what those were).
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = BEHIND_TLS_PROXY
+# Previously unset entirely: a login session had no server-enforced
+# expiry at all — only "until the browser drops the cookie", which
+# doesn't happen on a front-desk machine where the browser is routinely
+# left open for an entire shift or longer. session.permanent is set at
+# successful login (see login() below) so this actually takes effect.
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(
+    hours=float(os.environ.get("SESSION_LIFETIME_HOURS", "12"))
+)
+
+# Optional network allowlist: comma-separated CIDR blocks (e.g.
+# "192.168.1.0/24,10.0.0.5/32"). Unset by default — no behavior change
+# for a normal single-router clinic LAN. Lets an operator whose network
+# is bigger/flatter than that (e.g. one shared VLAN with other, unrelated
+# devices) restrict which source addresses can reach the app at all,
+# independent of and in addition to login/permissions.
+_ALLOWED_NETWORKS = []
+for _cidr in os.environ.get("VETZONE_ALLOWED_NETWORKS", "").split(","):
+    _cidr = _cidr.strip()
+    if _cidr:
+        _ALLOWED_NETWORKS.append(ipaddress.ip_network(_cidr, strict=False))
+
+
+@app.before_request
+def _enforce_network_allowlist():
+    if not _ALLOWED_NETWORKS:
+        return None
+    try:
+        client_ip = ipaddress.ip_address(request.remote_addr)
+    except (ValueError, TypeError):
+        return ("Forbidden", 403)
+    if not any(client_ip in net for net in _ALLOWED_NETWORKS):
+        return ("Forbidden", 403)
+    return None
+
+
+# Simple in-memory per-IP rate limit on login attempts — independent of
+# (and in addition to) auth.py's existing per-USERNAME lockout, which
+# doesn't slow down someone trying many different usernames from one
+# source. No new dependency: a small sliding window keyed by client IP,
+# reset lazily. This is intentionally generous (20 requests / 5 minutes)
+# since a busy front desk can generate real login traffic from behind a
+# single router's IP; it's meant to blunt automated spraying, not to
+# police normal multi-person use of one shared network address.
+_LOGIN_ATTEMPTS_BY_IP = {}
+_LOGIN_RATE_LIMIT_WINDOW_SECONDS = 300
+_LOGIN_RATE_LIMIT_MAX = 20
+
+
+def _login_rate_limit_check(ip):
+    now = time.monotonic()
+    window_start = now - _LOGIN_RATE_LIMIT_WINDOW_SECONDS
+    attempts = [t for t in _LOGIN_ATTEMPTS_BY_IP.get(ip, []) if t > window_start]
+    attempts.append(now)
+    _LOGIN_ATTEMPTS_BY_IP[ip] = attempts
+    # Opportunistic cleanup so this dict doesn't grow unbounded over a
+    # long-running process — cheap, and only runs on the (low-traffic)
+    # login route.
+    if len(_LOGIN_ATTEMPTS_BY_IP) > 1000:
+        for k in list(_LOGIN_ATTEMPTS_BY_IP.keys()):
+            if not [t for t in _LOGIN_ATTEMPTS_BY_IP[k] if t > window_start]:
+                del _LOGIN_ATTEMPTS_BY_IP[k]
+    return len(attempts) <= _LOGIN_RATE_LIMIT_MAX
+
+# Max size for any incoming request body (mainly file uploads — X-rays,
+# bloodwork PDFs, etc). 100 MB gives generous headroom for a large scan
+# while still blocking accidental/abusive multi-GB uploads from filling
+# the clinic machine's disk. Flask turns anything over this into a 413,
+# handled below with a friendly flash instead of a raw error page.
+MAX_UPLOAD_MB = 100
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
+
+@app.after_request
+def add_security_headers(resp):
+    """Baseline defense-in-depth headers. Doesn't replace anything (Jinja
+    autoescaping + parameterized SQL are the real XSS/injection defenses),
+    just closes off a few classes of browser-side attack cheaply."""
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "same-origin"
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# Crash logging — every unhandled exception gets a short reference ID shown
+# on the error page (safe to text/screenshot) and the full exception detail
+# written here (not safe to show every role — see handle_unexpected_error).
+# A dedicated file+logger, independent of the DB, so a crash caused by the
+# database itself being unreachable still gets captured.
+# ---------------------------------------------------------------------------
+ERROR_LOG_PATH = os.path.join(BASE_DIR, "logs", "errors.log")
+os.makedirs(os.path.dirname(ERROR_LOG_PATH), exist_ok=True)
+
+error_logger = logging.getLogger("vetzone.errors")
+error_logger.setLevel(logging.ERROR)
+if not error_logger.handlers:
+    _err_handler = logging.handlers.RotatingFileHandler(
+        ERROR_LOG_PATH, maxBytes=5_000_000, backupCount=5, encoding="utf-8"
+    )
+    _err_handler.setFormatter(logging.Formatter("%(message)s"))
+    error_logger.addHandler(_err_handler)
+
+
+def get_db():
+    if "db" not in g:
+        g.db = dbmod.getconn()
+    return g.db
+
+
+def is_safe_local_path(path):
+    """Only allow redirects to relative, in-app paths (no scheme/host)."""
+    if not path:
+        return False
+    if not path.startswith("/"):
+        return False
+    if path.startswith("//"):
+        return False
+    if "\\" in path:
+        return False
+    return True
+
+
+@app.teardown_appcontext
+def close_db(exc):
+    db = g.pop("db", None)
+    if db is not None:
+        try:
+            if exc is None:
+                db.commit()
+            else:
+                db.rollback()
+        finally:
+            # Always return the connection to the pool, even if the
+            # commit/rollback above raised (e.g. the connection dropped
+            # mid-request) — the pool discards a connection it can't
+            # reuse and opens a replacement, so this can never leak a
+            # connection reference the way an un-guarded db.close() call
+            # that never ran would have.
+            dbmod.putconn(db)
+
+
+class BadNumber(ValueError):
+    """Raised by parse_money() when a submitted field isn't blank but also
+    isn't a valid number — lets the route catch it once and show a friendly
+    error instead of a raw ValueError (Python) or invalid-input-syntax
+    error (Postgres) turning into an uncaught 500."""
+
+
+def parse_money(raw, required=False):
+    if raw is None or str(raw).strip() == "":
+        if required:
+            raise BadNumber("required")
+        return None
+    try:
+        val = float(raw)
+    except ValueError:
+        raise BadNumber(raw)
+    # float() happily parses "nan"/"inf"/"-inf" without raising — and every
+    # bound check elsewhere in the app (`x > cap`, `x < 0`, etc.) silently
+    # evaluates to False against NaN, so an unchecked NaN doesn't just slip
+    # past validation, it appears to *pass* every check downstream. Reject
+    # both here, once, so every one of this function's call sites inherits
+    # the fix instead of needing its own guard.
+    if not math.isfinite(val):
+        raise BadNumber(raw)
+    return val
+
+
+def parse_int(raw, required=False):
+    """Same shape as parse_money(), for INTEGER columns (e.g. lead_time_days).
+    Blank collapses to None; non-numeric input raises BadNumber instead of
+    reaching the DB and surfacing as a raw Postgres cast error."""
+    if raw is None or str(raw).strip() == "":
+        if required:
+            raise BadNumber("required")
+        return None
+    try:
+        return int(raw)
+    except (ValueError, OverflowError):
+        raise BadNumber(raw)
+
+
+class BadDate(ValueError):
+    """Raised by clean_date() when a submitted date field isn't blank but
+    also isn't a valid ISO date — lets the route catch it once and show a
+    friendly error instead of a raw ValueError/Postgres 'invalid input
+    syntax for type date' turning into an uncaught 500. More importantly:
+    this is what stops an empty string ('') from ever reaching a date
+    column. '' is not NULL, so a downstream query that assumes a date
+    column is only ever 'a real date or NULL' (e.g. `WHERE date IS NOT
+    NULL` followed by `date::date`) breaks the moment it meets one — see
+    data_integrity_framework.md for the incident this fixes."""
+
+
+def clean(v):
+    """Collapse '' / whitespace-only to None; otherwise return the
+    trimmed value. Use this on read-side filters and any field where
+    blank-vs-missing are supposed to mean the same thing but format
+    validation would be too strict (e.g. a bad ?date= query param should
+    degrade to 'no results', not a hard error)."""
+    if v is None:
+        return None
+    v = v.strip()
+    return v or None
+
+
+def clean_date(v, field="date"):
+    """Same as clean(), but also validates the value is a real
+    YYYY-MM-DD date if present. Use this on WRITE paths (form -> DB)
+    where a bad value should be rejected outright — never on read-side
+    filters, where clean() (no format check) is the right choice."""
+    v = clean(v)
+    if v is None:
+        return None
+    try:
+        datetime.strptime(v, "%Y-%m-%d")
+    except ValueError:
+        raise BadDate(f"{field.replace('_', ' ').title()} must be a valid date (YYYY-MM-DD).")
+    return v
+
+
+# Each deployment of this app serves exactly one clinic in one country, so a
+# small self-contained normalizer (rather than pulling in a general-purpose
+# library like `phonenumbers`) is simpler and has no extra dependency to
+# install. Differs per clinic — this is the ONE line that changes between
+# Vetzone/ChamPet (Iraq) and Dogtopia (Jordan).
+PHONE_COUNTRY_CODE = "964"
+
+
+class BadPhone(ValueError):
+    """Raised by normalize_phone() when a submitted phone number isn't blank
+    but also can't be confidently normalized to E.164 — lets the route show
+    a friendly error instead of silently saving something WhatsApp/wa.me
+    links won't be able to use later."""
+
+
+def normalize_phone(raw):
+    """
+    Normalizes a phone number to E.164 (+<countrycode><number>). Returns
+    None for a blank/optional field. Accepts a local number with a leading
+    trunk 0 (e.g. "07701234567"), a number already carrying the country
+    code (with or without a leading + or 00), or raises BadPhone if what
+    was typed doesn't resemble a real phone number at all.
+    """
+    if raw is None or not str(raw).strip():
+        return None
+    raw = str(raw).strip()
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        raise BadPhone(raw)
+    if raw.startswith("+"):
+        candidate = "+" + digits
+    elif digits.startswith("00"):
+        candidate = "+" + digits[2:]
+    elif digits.startswith("0"):
+        candidate = "+" + PHONE_COUNTRY_CODE + digits[1:]
+    elif digits.startswith(PHONE_COUNTRY_CODE):
+        candidate = "+" + digits
+    else:
+        candidate = "+" + PHONE_COUNTRY_CODE + digits
+    if re.fullmatch(r"\+[1-9]\d{7,14}", candidate):
+        return candidate
+    raise BadPhone(raw)
+
+
+@app.template_filter("money")
+def money_filter(v):
+    return logic.fmt_money(v)
+
+
+def lan_address():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def vet_users(db):
+    # Thin wrapper so every existing call site (visit forms, grooming,
+    # inpatient) keeps working unchanged — the actual query lives in
+    # logic.vet_users(), shared with the Appointments page's day_grid(),
+    # so there's exactly one place that can go stale, not two.
+    return logic.vet_users(db)
+
+
+def cached_dashboard_snapshot(db):
+    """dashboard_snapshot() scans several tables. It's needed on every page
+    (for the nav alert badge) and again on the dashboard route itself —
+    cache it per-request so it only runs once."""
+    if "dash_snap" not in g:
+        g.dash_snap = logic.dashboard_snapshot(db)
+    return g.dash_snap
+
+
+# ---------------------------------------------------------------------------
+# Pagination — 50 rows/page across every list view in the system
+# ---------------------------------------------------------------------------
+PER_PAGE = 50
+
+
+def get_page():
+    try:
+        p = int(request.args.get("page", 1))
+    except (TypeError, ValueError):
+        p = 1
+    return max(1, p)
+
+
+def page_count(total, per_page=PER_PAGE):
+    return max(1, (total + per_page - 1) // per_page)
+
+
+def page_offset(page, per_page=PER_PAGE):
+    return (page - 1) * per_page
+
+
+# ---------------------------------------------------------------------------
+# Slow report pages (Insights, Retention): background job + loading shell
+# ---------------------------------------------------------------------------
+def _render_with_progress(template_name, step_labels, compute_fn, page_title, page_note=None):
+    """
+    Shared pattern for report pages slow enough to need a progress bar
+    (Insights, Retention). On first visit, starts a background job running
+    compute_fn(update) (which must return the dict of template variables
+    the real page needs) and renders a lightweight loading shell instead;
+    once the client's poll reports the job done, the shell redirects back
+    to this same URL with ?job_id=..., and THIS SAME route then picks up
+    the finished job's already-computed result and renders the real page.
+
+    The slow part only ever runs once, in the background thread; the
+    actual page render always happens inside a normal request, so
+    session/g/url_for/current-user context all work exactly as they
+    always do (rendering from a background thread would have none of
+    that, which is why the heavy lifting and the rendering are kept in
+    two separate steps like this rather than trying to render from the
+    thread directly).
+    """
+    job_id = request.args.get("job_id")
+    if job_id:
+        result = jobs.take_result(job_id)
+        if result is not None:
+            return render_template(template_name, **result)
+        # Not found / not finished yet / already consumed (a stale or
+        # reloaded link) — fall through and start a fresh job below
+        # rather than erroring, since any of those are recoverable just
+        # by trying again.
+
+    new_job_id = jobs.start(step_labels, compute_fn)
+    # Preserve whatever other query params got here (e.g. ?page=2 on
+    # Retention) rather than dropping them — built as a real url_for() call
+    # so the client just navigates to a finished URL rather than having to
+    # reconstruct it with string concatenation.
+    other_args = {k: v for k, v in request.args.items() if k != "job_id"}
+    reload_url = url_for(request.endpoint, job_id=new_job_id, **other_args)
+    return render_template("_loading_shell.html", job_id=new_job_id, reload_url=reload_url,
+                            page_title=page_title, page_note=page_note)
+
+
+@app.route("/jobs/status")
+def jobs_status():
+    """
+    Polling endpoint for the report-page loading shells (Insights,
+    Retention) and the Reports 'Rebuild' progress panel. Gated only by
+    being logged in (like every other route, via require_login()) rather
+    than by the specific report's own permission — job_id is an
+    unguessable random token (see jobs.py's uuid4), so being able to
+    supply one already implies having just been handed it by the page
+    that started that job.
+    """
+    job_id = request.args.get("job_id", "")
+    state = jobs.status(job_id)
+    if state is None:
+        return jsonify({"status": "not_found"}), 404
+    payload = {
+        "status": state["status"],
+        "steps": state["steps"],
+        "current": state["current"],
+        "fraction": state.get("fraction"),
+        "started_at": state["started_at"],
+    }
+    if state["status"] == "error":
+        payload["message"] = state.get("error")
+    return jsonify(payload)
+
+
+def pagination_url(page, page_param="page"):
+    """Builds a link to another page of the current view, preserving every
+    other query-string filter (search terms, sort, date, etc)."""
+    args = request.args.to_dict()
+    args[page_param] = page
+    return url_for(request.endpoint, **args)
+
+
+app.jinja_env.globals["pagination_url"] = pagination_url
+app.jinja_env.globals["has_permission"] = auth.has_permission
+
+
+# ---------------------------------------------------------------------------
+# Auth gate
+# ---------------------------------------------------------------------------
+OPEN_ENDPOINTS = {"login", "static", "favicon_ico", "health"}
+
+
+@app.route("/favicon.ico")
+def favicon_ico():
+    # Safari (and some other browsers) probe this exact root-level path
+    # directly, independent of the <link rel="icon"> tags in base.html --
+    # without this route there's nothing at /favicon.ico at all (only at
+    # /static/favicon-v2.ico), so Safari can end up falling back to
+    # whatever it last had cached for this origin instead of picking up
+    # the new icon.
+    return send_from_directory(app.static_folder, "favicon-v2.ico")
+
+
+@app.before_request
+def require_login():
+    if request.endpoint in OPEN_ENDPOINTS or request.endpoint is None:
+        return
+    if not session.get("user_id"):
+        return redirect(url_for("login", next=request.path))
+    db = get_db()
+    user = auth.current_user(db)
+    if not user:
+        session.clear()
+        return redirect(url_for("login"))
+    auth.refresh_session_permissions(db, user)
+    if user["must_change_password"] and request.endpoint != "change_password":
+        return redirect(url_for("change_password"))
+
+
+@app.context_processor
+def inject_globals():
+    """Note: wrapped defensively — this context processor runs on every
+    single page render (it feeds the sidebar/nav), including error pages.
+    If the database itself is the reason a page is failing (its most
+    likely failure mode), we still want the 500/403/404 pages to render
+    with sane fallback values instead of throwing a second exception while
+    trying to *show* the first one."""
+    try:
+        db = get_db()
+        clinic_name = logic.get_setting(db, "clinic_name", "Vetzone IQ")
+        clinic_location = logic.get_setting(db, "clinic_location", "Baghdad, Iraq")
+        ctx = dict(clinic_name=clinic_name, clinic_location=clinic_location, today=date.today().isoformat(),
+                   current_role=session.get("role"), current_username=session.get("username"),
+                   is_system_admin=auth.is_system_admin(), session_user_id=session.get("user_id"))
+        if session.get("user_id"):
+            snap = cached_dashboard_snapshot(db)
+            ctx["alert_count"] = (
+                len(snap["due_today"]) + len(snap["low_stock"]) +
+                len(snap["overdue_audit"]) + len(snap["expiring"]) +
+                len(snap["wellness_due"])
+            )
+        else:
+            ctx["alert_count"] = 0
+        return ctx
+    except Exception:
+        error_logger.error(
+            "inject_globals() itself failed (likely DB unreachable) while "
+            "rendering %s %s — falling back to static nav values.\n%s",
+            request.method, request.path, traceback.format_exc()
+        )
+        return dict(
+            clinic_name="Vetzone IQ", clinic_location="",
+            today=date.today().isoformat(),
+            current_role=session.get("role"), current_username=session.get("username"),
+            alert_count=0, is_system_admin=False, session_user_id=session.get("user_id"),
+        )
+
+
+@app.errorhandler(403)
+def forbidden(e):
+    return render_template("error_403.html"), 403
+
+
+@app.errorhandler(404)
+def not_found(e):
+    return render_template("error_404.html"), 404
+
+
+@app.errorhandler(413)
+def too_large(e):
+    """Note: deliberately returns a plain 302 (not a 413 body) so this
+    plays nicely with the universal upload XHR in upload-progress.js —
+    browsers/XHR don't auto-follow a redirect that's paired with a non-3xx
+    status code, and we want the flash message to actually surface on the
+    page the user lands on, not get silently stranded in the session."""
+    flash(f"That file is too large — the limit is {MAX_UPLOAD_MB} MB per upload.", "error")
+    from urllib.parse import urlparse
+    ref_path = urlparse(request.referrer or "").path
+    target = ref_path if is_safe_local_path(ref_path) else None
+    return redirect(target or url_for("dashboard"))
+
+
+def _fallback_redirect():
+    """Best-effort 'send them back where they came from' for the global
+    validation safety net below — falls back to the dashboard if there's
+    no safe referrer to bounce to."""
+    ref = request.referrer or ""
+    # referrer is a full URL; is_safe_local_path only wants the path part
+    from urllib.parse import urlparse
+    path = urlparse(ref).path if ref else ""
+    if is_safe_local_path(path):
+        return redirect(path)
+    return redirect(url_for("dashboard"))
+
+
+@app.errorhandler(BadNumber)
+def handle_bad_number(e):
+    """Safety net for BadNumber. Most routes already catch this themselves
+    with a field-specific message (e.g. 'Payment amount must be a valid
+    number.'); this exists so a route that forgets to catch it degrades to
+    a flashed error instead of an uncaught 500."""
+    flash("One of the number fields on that form wasn't valid. Please check the amounts and try again.", "error")
+    return _fallback_redirect()
+
+
+@app.errorhandler(BadPhone)
+def handle_bad_phone(e):
+    """Safety net for BadPhone — same idea as handle_bad_number() above."""
+    flash("That phone number doesn't look valid. Please check it and try again.", "error")
+    return _fallback_redirect()
+
+
+_REDACT_PATTERNS = [
+    # Postgres constraint-violation detail lines look like:
+    #   Key (phone)=(0770123456) already exists.
+    # Keep the column name (that's genuinely useful for debugging — it
+    # tells you *which* field collided) but blank out the actual value.
+    (re.compile(r"(Key \([^)]+\)=\()[^)]*(\))"), r"\1REDACTED\2"),
+    # Email addresses, anywhere they appear in a message.
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "[REDACTED EMAIL]"),
+    # Runs of 6+ digits (with optional spaces/dashes) — catches phone
+    # numbers without needing to know the clinic's local phone format.
+    (re.compile(r"\b\d[\d\-\s]{5,}\d\b"), "[REDACTED NUMBER]"),
+]
+
+
+def redact_sensitive(text):
+    """Masks the specific patterns most likely to carry real patient/owner
+    data inside an error message (see _REDACT_PATTERNS above) before that
+    text is ever shown on a page or copied into a support message. Used
+    only for what's displayed in the browser — logs/errors.log always
+    keeps the original, unredacted text for real debugging."""
+    if not text:
+        return text
+    for pattern, repl in _REDACT_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(e):
+    """Catch-all for anything not handled above — a real bug, a DB outage,
+    a third-party library error, etc. Flask walks the exception's class
+    hierarchy to find the closest registered handler, so this only ever
+    fires for exceptions with no more specific handler; 403/404/413/
+    BadNumber/BadPhone (and any other HTTPException) are all matched
+    before falling through to here and are passed through untouched.
+
+    Design choice: the on-screen copy box is shown to *every* user, not
+    gated by role. A reference ID + route + exception type alone isn't
+    enough for anyone to actually diagnose a bug from — the real message
+    and traceback are what matter, and whoever happens to hit a crash
+    (not necessarily an Admin, and not necessarily technical) is the
+    person who'll realistically be the one sending it along. Gating the
+    useful part behind "Admin only" would defeat the point.
+
+    What IS scrubbed: the raw exception *message* text specifically —
+    because Postgres constraint-violation errors sometimes echo the
+    actual offending value inline (e.g. "Key (phone)=(0770123456) already
+    exists"), which would otherwise put a real patient/owner's data
+    on-screen for anyone who hits that crash. redact_sensitive() masks
+    those values (keeping the field name, which is what's actually useful
+    for debugging) before anything is rendered. The unredacted original
+    always goes to logs/errors.log regardless, for whoever has real
+    server access and needs the exact value to reproduce something.
+    """
+    if isinstance(e, HTTPException):
+        return e
+
+    error_id = uuid.uuid4().hex[:8].upper()
+    when = datetime.now()
+    tb_text = traceback.format_exc()
+
+    error_logger.error(
+        "\n".join([
+            "=" * 78,
+            f"Error ID:   {error_id}",
+            f"Time:       {when.isoformat(timespec='seconds')}",
+            f"User:       {session.get('username') or '(not logged in)'} ({session.get('role') or '-'})",
+            f"Request:    {request.method} {request.path}",
+            f"Query:      {request.query_string.decode('utf-8', 'replace') or '-'}",
+            f"Referrer:   {request.referrer or '-'}",
+            "-" * 78,
+            tb_text.rstrip(),  # unredacted — this file is for whoever has server access
+            "",
+        ])
+    )
+
+    return render_template(
+        "error_500.html",
+        error_id=error_id,
+        error_time=when.strftime("%Y-%m-%d %H:%M:%S"),
+        request_line=f"{request.method} {request.path}",
+        exc_type=type(e).__name__,
+        exc_message=redact_sensitive(str(e)),
+        traceback_text=redact_sensitive(tb_text),
+    ), 500
+
+
+# ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("user_id"):
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        if not _login_rate_limit_check(request.remote_addr):
+            flash("Too many login attempts from this network. Please wait a few minutes and try again.", "error")
+            return render_template("login.html")
+        db = get_db()
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        locked, minutes_left, unlock_at = auth.login_lock_status(db, username)
+        if locked:
+            flash(f"Too many failed attempts for that account. Try again in about {minutes_left} minute(s) "
+                  f"(around {unlock_at.strftime('%H:%M')}).", "error")
+            return render_template("login.html", lockout_unlock_at=unlock_at.isoformat(timespec="seconds"))
+        row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        ok = row and row["active"] and auth.verify_password(row["password_hash"], password)
+        auth.log_login(db, row["id"] if row else None, username, bool(ok))
+        if not ok:
+            flash("Incorrect username or password, or account is disabled.", "error")
+            return render_template("login.html")
+        session["user_id"] = row["id"]
+        session["username"] = row["full_name"]
+        # Gives the session an actual server-enforced expiry (see
+        # PERMANENT_SESSION_LIFETIME above) instead of relying solely on
+        # the browser dropping the cookie on close — which doesn't happen
+        # on a front-desk machine left open for a whole shift.
+        session.permanent = True
+        auth.refresh_session_permissions(db, row)
+        nxt = request.args.get("next")
+        if not is_safe_local_path(nxt):
+            nxt = url_for("dashboard")
+        return redirect(nxt)
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
+@app.route("/change-password", methods=["GET", "POST"])
+def change_password():
+    db = get_db()
+    forced = bool(auth.current_user(db)["must_change_password"])
+    if request.method == "POST":
+        current = request.form.get("current_password", "")
+        new = request.form.get("new_password", "")
+        confirm = request.form.get("confirm_password", "")
+        user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+        if not auth.verify_password(user["password_hash"], current):
+            flash("Current password is incorrect.", "error")
+        elif len(new) < 6:
+            flash("New password must be at least 6 characters.", "error")
+        elif new != confirm:
+            flash("New password and confirmation don't match.", "error")
+        else:
+            db.execute("UPDATE users SET password_hash=?, must_change_password=false WHERE id=?",
+                       (auth.hash_password(new), user["id"]))
+            db.commit()
+            flash("Password updated.", "success")
+            return redirect(url_for("dashboard"))
+    return render_template("change_password.html", forced=forced)
+
+
+# ---------------------------------------------------------------------------
+# Admin — user & role management
+# ---------------------------------------------------------------------------
+def _active_admin_count(db):
+    return db.execute(
+        "SELECT COUNT(*) c FROM users u JOIN roles r ON r.id = u.role_id "
+        "WHERE u.active=true AND r.is_system=true"
+    ).fetchone()["c"]
+
+
+def _role_or_404(db, role_id):
+    row = db.execute("SELECT * FROM roles WHERE id=?", (role_id,)).fetchone()
+    if not row:
+        abort(404)
+    return row
+
+
+@app.route("/admin/users")
+@auth.permission_required("manage_users_roles")
+def admin_users():
+    db = get_db()
+    users = db.execute(
+        "SELECT u.*, r.name AS role_name, r.discount_cap AS role_discount_cap "
+        "FROM users u JOIN roles r ON r.id = u.role_id ORDER BY u.full_name"
+    ).fetchall()
+    roles = db.execute("SELECT * FROM roles ORDER BY is_system DESC, created_at").fetchall()
+    staff_counts = {
+        r["role_id"]: r["c"] for r in
+        db.execute("SELECT role_id, COUNT(*) c FROM users WHERE active=true GROUP BY role_id").fetchall()
+    }
+    role_perms = {}
+    for rp in db.execute("SELECT role_id, permission_id FROM role_permissions").fetchall():
+        role_perms.setdefault(rp["role_id"], set()).add(rp["permission_id"])
+
+    perm_categories = []
+    for cat in auth.PERMISSION_CATEGORIES:
+        perm_categories.append((cat, [(k, label) for k, label, c in auth.PERMISSIONS if c == cat]))
+
+    return render_template(
+        "admin_users.html", users=users, roles=roles,
+        staff_counts=staff_counts, role_perms=role_perms,
+        perm_categories=perm_categories,
+    )
+
+
+@app.route("/admin/users/new", methods=["POST"])
+@auth.permission_required("manage_users_roles")
+def admin_user_new():
+    db = get_db()
+    f = request.form
+    username = f.get("username", "").strip()
+    password = f.get("password", "")
+    full_name = f.get("full_name", "").strip()
+    role_id = f.get("role_id", "")
+    role = db.execute("SELECT id FROM roles WHERE id=?", (role_id,)).fetchone()
+    if not username or not full_name or not role:
+        flash("Fill in a username, full name, and role.", "error")
+        return redirect(url_for("admin_users"))
+    if len(password) < 6:
+        flash("Password must be at least 6 characters.", "error")
+        return redirect(url_for("admin_users"))
+    if db.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
+        flash("That username is already taken.", "error")
+        return redirect(url_for("admin_users"))
+
+    custom_cap = None
+    if f.get("capmode") == "custom":
+        try:
+            custom_cap = int(f.get("custom_discount_cap", ""))
+        except ValueError:
+            flash("Custom discount override must be a whole number.", "error")
+            return redirect(url_for("admin_users"))
+        if custom_cap < 0 or custom_cap > 100:
+            flash("Custom discount override must be between 0 and 100.", "error")
+            return redirect(url_for("admin_users"))
+
+    uid = auth.new_user_id()
+    db.execute(
+        "INSERT INTO users (id,username,password_hash,full_name,role_id,custom_discount_cap,active,must_change_password,created_at) "
+        "VALUES (?,?,?,?,?,?,true,true,?)",
+        (uid, username, auth.hash_password(password), full_name, role_id, custom_cap,
+         datetime.now().isoformat(timespec="seconds")),
+    )
+    auth.log_change(db, "users", uid, "create")
+    db.commit()
+    flash(f"User {username} created. They'll be asked to set a new password on first login.", "success")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/<user_id>/toggle-active", methods=["POST"])
+@auth.permission_required("manage_users_roles")
+def admin_user_toggle(user_id):
+    db = get_db()
+    if user_id == session["user_id"]:
+        flash("You can't disable your own account.", "error")
+        return redirect(url_for("admin_users"))
+    row = db.execute(
+        "SELECT u.active, r.is_system FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id=?",
+        (user_id,),
+    ).fetchone()
+    if row is None:
+        flash("User not found.", "error")
+        return redirect(url_for("admin_users"))
+    new_val = not row["active"]
+    if new_val is False and row["is_system"] and _active_admin_count(db) <= 1:
+        flash("Can't disable the last active Admin.", "error")
+        return redirect(url_for("admin_users"))
+    db.execute("UPDATE users SET active=? WHERE id=?", (new_val, user_id))
+    auth.bump_permissions_version(db)
+    auth.log_change(db, "users", user_id, "update", {"active": (row["active"], new_val)})
+    db.commit()
+    flash("User updated.", "success")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/<user_id>/role", methods=["POST"])
+@auth.permission_required("manage_users_roles")
+def admin_user_role(user_id):
+    db = get_db()
+    new_role_id = request.form.get("role_id", "")
+    new_role = db.execute("SELECT id, name, is_system FROM roles WHERE id=?", (new_role_id,)).fetchone()
+    if not new_role:
+        flash("Not a valid role.", "error")
+        return redirect(url_for("admin_users"))
+    row = db.execute(
+        "SELECT u.role_id, r.name AS role_name, r.is_system FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id=?",
+        (user_id,),
+    ).fetchone()
+    if row is None:
+        flash("User not found.", "error")
+        return redirect(url_for("admin_users"))
+    if row["is_system"] and not new_role["is_system"] and _active_admin_count(db) <= 1:
+        flash("Can't move the last active Admin out of the Admin role.", "error")
+        return redirect(url_for("admin_users"))
+    db.execute("UPDATE users SET role_id=? WHERE id=?", (new_role_id, user_id))
+    auth.bump_permissions_version(db)
+    auth.log_change(db, "users", user_id, "update", {"role": (row["role_name"], new_role["name"])})
+    db.commit()
+    flash("Role updated.", "success")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/<user_id>/reset-password", methods=["POST"])
+@auth.permission_required("manage_users_roles")
+def admin_user_reset_password(user_id):
+    db = get_db()
+    new_pw = request.form.get("new_password", "")
+    if len(new_pw) < 6:
+        flash("Password must be at least 6 characters.", "error")
+        return redirect(url_for("admin_users"))
+    db.execute("UPDATE users SET password_hash=?, must_change_password=true WHERE id=?",
+               (auth.hash_password(new_pw), user_id))
+    auth.log_change(db, "users", user_id, "update", {"password": ("(hidden)", "(reset by admin)")})
+    db.commit()
+    flash("Password reset. The user will be asked to set a new one on next login.", "success")
+    return redirect(url_for("admin_users"))
+
+
+# ---------------------------------------------------------------------------
+# Admin — roles & permissions
+# ---------------------------------------------------------------------------
+@app.route("/admin/roles/new", methods=["POST"])
+@auth.permission_required("manage_users_roles")
+def admin_role_new():
+    db = get_db()
+    f = request.form
+    name = f.get("name", "").strip()
+    description = f.get("description", "").strip() or None
+    if not name:
+        flash("Give the new role a name.", "error")
+        return redirect(url_for("admin_users"))
+    if db.execute("SELECT 1 FROM roles WHERE lower(name)=lower(?)", (name,)).fetchone():
+        flash(f'A role named "{name}" already exists.', "error")
+        return redirect(url_for("admin_users"))
+    try:
+        cap = int(f.get("discount_cap", "0") or "0")
+    except ValueError:
+        flash("Max Discount must be a whole number.", "error")
+        return redirect(url_for("admin_users"))
+    if cap < 0 or cap > 100:
+        flash("Max Discount must be between 0 and 100.", "error")
+        return redirect(url_for("admin_users"))
+
+    perms = [p for p in f.getlist("permissions") if p in auth.PERMISSION_KEY_SET]
+    is_vet_role = bool(f.get("is_vet_role"))
+    role_id = auth.new_role_id()
+    db.execute(
+        "INSERT INTO roles (id,name,description,is_system,discount_cap,is_vet_role,created_at) "
+        "VALUES (?,?,?,false,?,?,?)",
+        (role_id, name, description, cap, is_vet_role, datetime.now().isoformat(timespec="seconds")),
+    )
+    for p in perms:
+        db.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES (?,?)", (role_id, p))
+    auth.bump_permissions_version(db)
+    auth.log_change(db, "roles", role_id, "create", {"name": (None, name)})
+    db.commit()
+    flash(f'"{name}" role added.', "success")
+    if auth.no_vet_role_configured(db):
+        flash("No role is currently marked \"Can be assigned as a vet\" — Appointments, "
+              "New Visit, Grooming, and Inpatient vet pickers will show no options until "
+              "at least one role has this turned on.", "error")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/roles/<role_id>/edit", methods=["POST"])
+@auth.permission_required("manage_users_roles")
+def admin_role_edit(role_id):
+    db = get_db()
+    role = _role_or_404(db, role_id)
+    if role["is_system"]:
+        flash("The Admin role can't be edited.", "error")
+        return redirect(url_for("admin_users"))
+    f = request.form
+    name = f.get("name", "").strip()
+    description = f.get("description", "").strip() or None
+    if not name:
+        flash("A role needs a name.", "error")
+        return redirect(url_for("admin_users"))
+    if db.execute("SELECT 1 FROM roles WHERE lower(name)=lower(?) AND id<>?", (name, role_id)).fetchone():
+        flash(f'A role named "{name}" already exists.', "error")
+        return redirect(url_for("admin_users"))
+    try:
+        cap = int(f.get("discount_cap", "0") or "0")
+    except ValueError:
+        flash("Max Discount must be a whole number.", "error")
+        return redirect(url_for("admin_users"))
+    if cap < 0 or cap > 100:
+        flash("Max Discount must be between 0 and 100.", "error")
+        return redirect(url_for("admin_users"))
+
+    perms = set(p for p in f.getlist("permissions") if p in auth.PERMISSION_KEY_SET)
+    is_vet_role = bool(f.get("is_vet_role"))
+    before = {
+        "name": role["name"], "description": role["description"], "discount_cap": role["discount_cap"],
+        "is_vet_role": role["is_vet_role"],
+    }
+    db.execute(
+        "UPDATE roles SET name=?, description=?, discount_cap=?, is_vet_role=? WHERE id=?",
+        (name, description, cap, is_vet_role, role_id),
+    )
+    db.execute("DELETE FROM role_permissions WHERE role_id=?", (role_id,))
+    for p in perms:
+        db.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES (?,?)", (role_id, p))
+    auth.bump_permissions_version(db)
+    after = {"name": name, "description": description, "discount_cap": cap, "is_vet_role": is_vet_role}
+    changes = {k: (before[k], after[k]) for k in before if before[k] != after[k]}
+    auth.log_change(db, "roles", role_id, "update", changes or None)
+    db.commit()
+    flash(f'"{name}" role saved.', "success")
+    if auth.no_vet_role_configured(db):
+        flash("No role is currently marked \"Can be assigned as a vet\" — Appointments, "
+              "New Visit, Grooming, and Inpatient vet pickers will show no options until "
+              "at least one role has this turned on.", "error")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/roles/<role_id>/delete", methods=["POST"])
+@auth.permission_required("manage_users_roles")
+def admin_role_delete(role_id):
+    db = get_db()
+    role = _role_or_404(db, role_id)
+    if role["is_system"]:
+        flash("The Admin role can't be deleted.", "error")
+        return redirect(url_for("admin_users"))
+    assigned = db.execute("SELECT id FROM users WHERE role_id=?", (role_id,)).fetchall()
+    reassign_to = request.form.get("reassign_to") or None
+    if assigned:
+        target = db.execute("SELECT id, name, is_system FROM roles WHERE id=?", (reassign_to,)).fetchone()
+        if not target or target["id"] == role_id:
+            flash("Pick a role to move the affected staff to before deleting this one.", "error")
+            return redirect(url_for("admin_users"))
+        for u in assigned:
+            db.execute("UPDATE users SET role_id=? WHERE id=?", (target["id"], u["id"]))
+        db.execute("DELETE FROM roles WHERE id=?", (role_id,))
+        auth.bump_permissions_version(db)
+        auth.log_change(db, "roles", role_id, "delete",
+                         {"reassigned_to": (None, target["name"]), "staff_moved": (None, len(assigned))})
+        db.commit()
+        flash(f'{len(assigned)} staff member(s) moved to {target["name"]} · "{role["name"]}" deleted.', "success")
+    else:
+        db.execute("DELETE FROM roles WHERE id=?", (role_id,))
+        auth.bump_permissions_version(db)
+        auth.log_change(db, "roles", role_id, "delete", {"name": (role["name"], None)})
+        db.commit()
+        flash(f'"{role["name"]}" deleted.', "success")
+    if auth.no_vet_role_configured(db):
+        flash("No role is currently marked \"Can be assigned as a vet\" — Appointments, "
+              "New Visit, Grooming, and Inpatient vet pickers will show no options until "
+              "at least one role has this turned on.", "error")
+    return redirect(url_for("admin_users"))
+
+
+# ---------------------------------------------------------------------------
+# Logins and Changes (admin-only audit page)
+# ---------------------------------------------------------------------------
+@app.route("/admin/logs")
+@auth.permission_required("view_logins_changes")
+def admin_logs():
+    db = get_db()
+    day = request.args.get("date", date.today().isoformat())
+    changes = logic.changes_on_date(db, day)
+    logins = logic.logins_on_date(db, day)
+    return render_template("admin_logs.html", day=day, today=date.today().isoformat(), changes=changes, logins=logins)
+
+
+@app.route("/health")
+def health():
+    """Used by updater.py to confirm a new release actually boots and can
+    reach the database — not just that the process started. No auth
+    required (harmless — reveals nothing beyond the version string; the
+    updater probes this on a throwaway localhost port before the release
+    it's checking is ever promoted)."""
+    try:
+        get_db().execute("SELECT 1")
+        return {"status": "ok", "version": VERSION}, 200
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}, 503
+
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+@app.route("/")
+def dashboard():
+    db = get_db()
+    snap = cached_dashboard_snapshot(db)
+    # "Needs Admin Review" is a cross-cutting oversight panel that doesn't map to
+    # one single permission from the checklist — shown to anyone with at least
+    # one of the Admin-group permissions, as the closest match to "some kind of
+    # clinic administrator" (its previous Admin-only gate, made granular).
+    is_overseer = (auth.has_permission("manage_users_roles") or auth.has_permission("manage_settings")
+                   or auth.has_permission("view_logins_changes"))
+    all_missed = logic.missed_items(db) if is_overseer else []
+    missed_page = get_page()
+    missed_total = len(all_missed)
+    missed_offset = page_offset(missed_page)
+    missed = all_missed[missed_offset:missed_offset + PER_PAGE]
+    opex_due = logic.opex_reminder_due(db) if auth.has_permission("view_financial_reports") else False
+    backup_alert = None
+    if auth.has_permission("manage_settings"):
+        import backup as backup_mod
+        backup_alert = logic.backup_alert_message(backup_mod.last_backup(db))
+    return render_template("dashboard.html", snap=snap, lan_address=lan_address(), missed=missed,
+                            opex_due=opex_due, backup_alert=backup_alert,
+                            missed_page=missed_page, missed_total_pages=page_count(missed_total),
+                            missed_total=missed_total)
+
+
+# ---------------------------------------------------------------------------
+# API
+# ---------------------------------------------------------------------------
+@app.route("/api/patients/search")
+def api_patients_search():
+    db = get_db()
+    term = request.args.get("q", "").strip()
+    if len(term) < 2:
+        return jsonify([])
+    rows = logic.search_patients(db, term)
+    return jsonify([{"id": r["id"], "animal_name": r["animal_name"], "species": r["species"],
+                      "owner_name": r["owner_name"], "owner_phone": r["owner_phone"]} for r in rows])
+
+
+@app.route("/api/inventory/lookup")
+def api_inventory_lookup():
+    db = get_db()
+    barcode_val = request.args.get("barcode", "").strip()
+    q = request.args.get("q", "").strip()
+    if barcode_val:
+        row = db.execute("SELECT id, name, barcode FROM inventory_list WHERE barcode=? AND active=true", (barcode_val,)).fetchone()
+        if not row:
+            return jsonify(None)
+        price = logic.item_sale_price(db, row["id"])
+        status = logic.inventory_status_by_id(db, row["id"])
+        return jsonify({"id": row["id"], "name": row["name"], "price": price,
+                        "stock": status["current_stock"] if status else None})
+    if q:
+        rows = db.execute("SELECT id, name FROM inventory_list WHERE active=true AND category='Retail' AND name ILIKE ? LIMIT 10",
+                          (f"%{q}%",)).fetchall()
+        out = []
+        for r in rows:
+            price = logic.item_sale_price(db, r["id"])
+            status = logic.inventory_status_by_id(db, r["id"])
+            out.append({"id": r["id"], "name": r["name"], "price": price,
+                        "stock": status["current_stock"] if status else None})
+        return jsonify(out)
+    return jsonify([])
+
+
+@app.route("/api/price-list/lookup")
+def api_price_list_lookup():
+    db = get_db()
+    q = request.args.get("q", "").strip()
+    # Repeatable — e.g. ?category=Service&category=Medicine. Both callers
+    # (visit billing, inpatient billing) always pass at least one; Retail
+    # is never a valid value here — Retail is sold exclusively through POS
+    # (its own dedicated search against inventory_list, untouched by this).
+    categories = [c for c in request.args.getlist("category") if c]
+    if len(q) < 2 or not categories:
+        return jsonify([])
+    placeholders = ",".join("?" * len(categories))
+    sql = (f"SELECT id, name, category, sale_price FROM price_list "
+           f"WHERE active=true AND sale_price IS NOT NULL AND category IN ({placeholders}) "
+           f"AND (id ILIKE ? OR name ILIKE ?) ORDER BY name LIMIT 15")
+    params = [*categories, f"%{q}%", f"%{q}%"]
+    rows = db.execute(sql, params).fetchall()
+    return jsonify([{"id": r["id"], "name": r["name"], "category": r["category"], "price": r["sale_price"]} for r in rows])
+
+
+@app.route("/api/browse-folder")
+@auth.permission_required("manage_settings")
+def api_browse_folder():
+    """
+    Lists subfolders (and, when ?ext= is given, matching files too) of a
+    path on THIS SERVER's filesystem — used by both the Backup Folder
+    picker and the Restore File picker on Settings. This has to browse the
+    server's disk, not the browser's — pg_dump/pg_restore (see backup.py)
+    run on the server, so a client-side file picker (which can only see
+    the browser's own machine) would pick the wrong computer's files
+    entirely whenever Settings is opened from a different machine than
+    the one running the app.
+    """
+    db = get_db()
+    requested = request.args.get("path", "").strip()
+    ext = (request.args.get("ext") or "").strip().lower()
+    if requested:
+        path = os.path.abspath(requested)
+    else:
+        configured = logic.get_setting(db, "backup_dir")
+        path = os.path.abspath(configured) if configured and os.path.isdir(configured) else os.path.expanduser("~")
+
+    if not os.path.isdir(path):
+        return jsonify({"error": f"\u201c{path}\u201d isn\u2019t a folder Vetzone IQ can see on this computer."}), 400
+
+    try:
+        entries = os.listdir(path)
+    except OSError as e:
+        return jsonify({"error": f"Can\u2019t open that folder: {e.strerror or e}"}), 400
+
+    folders, files = [], []
+    for name in entries:
+        if name.startswith("."):
+            continue
+        full = os.path.join(path, name)
+        if os.path.isdir(full) and not os.path.islink(full):
+            folders.append(name)
+        elif ext and os.path.isfile(full) and name.lower().endswith(ext):
+            files.append(name)
+    folders.sort(key=str.lower)
+    files.sort(key=str.lower)
+
+    parent = os.path.dirname(path)
+    return jsonify({
+        "current": path,
+        "parent": parent if parent != path else None,
+        "folders": folders,
+        "files": files,
+    })
+
+
+@app.route("/api/browse-folder/new-folder", methods=["POST"])
+@auth.permission_required("manage_settings")
+def api_browse_folder_new():
+    data = request.get_json(silent=True) or {}
+    parent = os.path.abspath((data.get("path") or "").strip())
+    name = (data.get("name") or "").strip()
+    if not name or "/" in name or "\\" in name:
+        return jsonify({"error": "Enter a plain folder name (no slashes)."}), 400
+    if not os.path.isdir(parent):
+        return jsonify({"error": "That parent folder no longer exists."}), 400
+    new_path = os.path.join(parent, name)
+    try:
+        os.makedirs(new_path, exist_ok=True)
+    except OSError as e:
+        return jsonify({"error": f"Couldn\u2019t create that folder: {e.strerror or e}"}), 400
+    return jsonify({"ok": True, "path": new_path})
+
+
+# ---------------------------------------------------------------------------
+# Owners
+# ---------------------------------------------------------------------------
+@app.route("/owners")
+@auth.permission_required("manage_owners")
+def owners_list():
+    db = get_db()
+    search = request.args.get("q", "").strip()
+    page = get_page()
+    if search:
+        total = db.execute("SELECT COUNT(*) c FROM owners WHERE name ILIKE ? OR phone ILIKE ?",
+                            (f"%{search}%", f"%{search}%")).fetchone()["c"]
+        rows = db.execute(
+            "SELECT * FROM owners WHERE name ILIKE ? OR phone ILIKE ? ORDER BY name LIMIT ? OFFSET ?",
+            (f"%{search}%", f"%{search}%", PER_PAGE, page_offset(page)),
+        ).fetchall()
+    else:
+        total = db.execute("SELECT COUNT(*) c FROM owners").fetchone()["c"]
+        rows = db.execute("SELECT * FROM owners ORDER BY name LIMIT ? OFFSET ?",
+                          (PER_PAGE, page_offset(page))).fetchall()
+    counts = {r["owner_id"]: r["c"] for r in db.execute("SELECT owner_id, COUNT(*) c FROM patients GROUP BY owner_id").fetchall()}
+    return render_template("owners_list.html", owners=rows, search=search, counts=counts,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/owners/new", methods=["GET", "POST"])
+@auth.permission_required("manage_owners")
+def owner_new():
+    db = get_db()
+    if request.method == "POST":
+        f = request.form
+        try:
+            phone = normalize_phone(f.get("phone"))
+        except BadPhone:
+            flash("That phone number doesn't look valid — check the digits and try again.", "error")
+            return render_template("owner_form.html", owner=None)
+        oid = dbmod.next_id(db, "OW")
+        db.execute("INSERT INTO owners (id,name,phone,address,notes) VALUES (?,?,?,?,?)",
+                  (oid, f["name"], phone, f.get("address"), f.get("notes")))
+        auth.log_change(db, "owners", oid, "create")
+        db.commit()
+        flash(f"Owner {oid} added.", "success")
+        return redirect(url_for("owner_detail", owner_id=oid))
+    return render_template("owner_form.html", owner=None)
+
+
+@app.route("/owners/<owner_id>")
+@auth.permission_required("manage_owners")
+def owner_detail(owner_id):
+    db = get_db()
+    owner = db.execute("SELECT * FROM owners WHERE id=?", (owner_id,)).fetchone()
+    if not owner:
+        flash("Owner not found.", "error")
+        return redirect(url_for("owners_list"))
+    patients = db.execute("SELECT * FROM patients WHERE owner_id=? ORDER BY animal_name", (owner_id,)).fetchall()
+    return render_template("owner_detail.html", owner=owner, patients=patients)
+
+
+@app.route("/owners/<owner_id>/edit", methods=["GET", "POST"])
+@auth.permission_required("manage_owners")
+def owner_edit(owner_id):
+    db = get_db()
+    owner = db.execute("SELECT * FROM owners WHERE id=?", (owner_id,)).fetchone()
+    if not owner:
+        flash("Owner not found.", "error")
+        return redirect(url_for("owners_list"))
+    if request.method == "POST":
+        f = request.form
+        try:
+            phone = normalize_phone(f.get("phone"))
+        except BadPhone:
+            flash("That phone number doesn't look valid — check the digits and try again.", "error")
+            return redirect(url_for("owner_edit", owner_id=owner_id))
+        new_vals = {"name": f["name"], "phone": phone, "address": f.get("address"), "notes": f.get("notes")}
+        changes = auth.diff_dict(owner, new_vals)
+        db.execute("UPDATE owners SET name=?, phone=?, address=?, notes=? WHERE id=?",
+                  (new_vals["name"], new_vals["phone"], new_vals["address"], new_vals["notes"], owner_id))
+        auth.log_change(db, "owners", owner_id, "update", changes)
+        db.commit()
+        flash("Owner updated.", "success")
+        return redirect(url_for("owner_detail", owner_id=owner_id))
+    return render_template("owner_form.html", owner=owner)
+
+
+# ---------------------------------------------------------------------------
+# Patients (sortable)
+# ---------------------------------------------------------------------------
+PATIENT_SORT_COLUMNS = {
+    "id": "p.id", "animal_name": "p.animal_name", "species": "p.species", "owner": "o.name",
+}
+
+
+@app.route("/patients")
+@auth.permission_required("manage_patients")
+def patients_list():
+    db = get_db()
+    search = request.args.get("q", "").strip()
+    sort = request.args.get("sort", "id")
+    direction = request.args.get("dir", "desc" if sort == "id" else "asc")
+    sort_col = PATIENT_SORT_COLUMNS.get(sort, "p.id")
+    direction_sql = "DESC" if direction == "desc" else "ASC"
+    page = get_page()
+
+    if search:
+        # search_patients() is already capped to the top 25 best matches —
+        # a single page's worth, so no further pagination needed here.
+        rows = logic.search_patients(db, search)
+        total = len(rows)
+        total_pages_ = 1
+    else:
+        total = db.execute("SELECT COUNT(*) c FROM patients").fetchone()["c"]
+        rows = db.execute(
+            f"SELECT p.*, o.name as owner_name, o.phone as owner_phone FROM patients p "
+            f"JOIN owners o ON o.id=p.owner_id ORDER BY {sort_col} {direction_sql} LIMIT ? OFFSET ?",
+            (PER_PAGE, page_offset(page)),
+        ).fetchall()
+        total_pages_ = page_count(total)
+    return render_template("patients_list.html", patients=rows, search=search, sort=sort, direction=direction,
+                            page=page, total_pages=total_pages_, total_count=total)
+
+
+@app.route("/patients/<patient_id>")
+@auth.permission_required("manage_patients")
+def patient_detail(patient_id):
+    db = get_db()
+    patient = db.execute(
+        "SELECT p.*, o.name as owner_name, o.phone as owner_phone, o.id as owner_id FROM patients p "
+        "JOIN owners o ON o.id=p.owner_id WHERE p.id=?", (patient_id,)
+    ).fetchone()
+    if not patient:
+        flash("Patient not found.", "error")
+        return redirect(url_for("patients_list"))
+    visits = db.execute("SELECT * FROM visits WHERE patient_id=? ORDER BY date DESC", (patient_id,)).fetchall()
+    visits = [dict(v) for v in visits]
+    for v in visits:
+        v["billing"] = logic.visit_billing_summary(db, v["id"])
+    grooming_sessions = [v for v in visits if v["grooming_needed"] == "Y"]
+    cases = db.execute("SELECT * FROM inpatient_cases WHERE patient_id=? ORDER BY admission_date DESC", (patient_id,)).fetchall()
+    boarding_sessions = logic.boarding_sessions_for_patient(db, patient_id)
+    return render_template("patient_detail.html", patient=patient, visits=visits, cases=cases,
+                            grooming_sessions=grooming_sessions, boarding_sessions=boarding_sessions)
+
+
+@app.route("/patients/<patient_id>/edit", methods=["GET", "POST"])
+@auth.permission_required("manage_patients")
+def patient_edit(patient_id):
+    db = get_db()
+    patient = db.execute("SELECT * FROM patients WHERE id=?", (patient_id,)).fetchone()
+    if not patient:
+        flash("Patient not found.", "error")
+        return redirect(url_for("patients_list"))
+    if request.method == "POST":
+        f = request.form
+        new_vals = {"animal_name": f["animal_name"], "species": f["species"], "sex": f.get("sex"),
+                    "age_note": f.get("age_note"), "repro_status": f.get("repro_status"),
+                    "housing": f.get("housing"), "notes": f.get("notes")}
+        changes = auth.diff_dict(patient, new_vals)
+        db.execute(
+            "UPDATE patients SET animal_name=?, species=?, sex=?, age_note=?, repro_status=?, housing=?, notes=? WHERE id=?",
+            (*new_vals.values(), patient_id),
+        )
+        auth.log_change(db, "patients", patient_id, "update", changes)
+        db.commit()
+        flash("Patient updated.", "success")
+        return redirect(url_for("patient_detail", patient_id=patient_id))
+    return render_template("patient_form_edit.html", patient=patient)
+
+
+@app.route("/patients/<patient_id>/history")
+@auth.permission_required("manage_patients")
+def patient_history(patient_id):
+    db = get_db()
+    patient = db.execute(
+        "SELECT p.*, o.name as owner_name FROM patients p JOIN owners o ON o.id=p.owner_id WHERE p.id=?", (patient_id,)
+    ).fetchone()
+    if not patient:
+        flash("Patient not found.", "error")
+        return redirect(url_for("patients_list"))
+    events = logic.patient_history(db, patient_id)
+    return render_template("patient_history.html", patient=patient, events=events)
+
+
+@app.route("/patients/<patient_id>/export/file")
+@auth.permission_required("manage_patients")
+def patient_export_file(patient_id):
+    db = get_db()
+    buf = pdf_export.export_patient_file(db, patient_id)
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"{patient_id}_patient_file.pdf")
+
+
+@app.route("/patients/<patient_id>/export/billing")
+@auth.permission_required("manage_patients")
+def patient_export_billing(patient_id):
+    db = get_db()
+    buf = pdf_export.export_patient_billing(db, patient_id)
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"{patient_id}_billing.pdf")
+
+
+@app.route("/pos/history/<int:sale_id>/export")
+@auth.permission_required("view_sales_history")
+def pos_export_receipt(sale_id):
+    db = get_db()
+    buf = pdf_export.export_sale_receipt(db, sale_id)
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"sale_{sale_id}_receipt.pdf")
+
+
+@app.route("/visits/<visit_id>/export")
+@auth.permission_required("manage_visits")
+def visit_export_pdf(visit_id):
+    db = get_db()
+    buf = pdf_export.export_visit_pdf(db, visit_id)
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"{visit_id}_visit.pdf")
+
+
+@app.route("/inpatient/<int:case_id>/export")
+@auth.permission_required("manage_inpatient")
+def inpatient_export_pdf(case_id):
+    db = get_db()
+    buf = pdf_export.export_inpatient_pdf(db, case_id)
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"inpatient_{case_id}.pdf")
+
+
+# ---------------------------------------------------------------------------
+# New Visit workflow
+# ---------------------------------------------------------------------------
+CASE_STATUSES = ["Needs Filling", "Ongoing", "Admitted to Inpatient", "Deceased/Euthanized",
+                  "Lost to Follow Up", "Resolved", "Referred"]
+FOLLOWUP_REASONS = ["Surgery Follow Up", "Medical Follow Up", "Vaccine", "Deworming", "Spot On", "Other"]
+WELLNESS_TYPES = ["Annual Vaccine", "First Vaccine", "Rabies Vaccine", "Deworming", "Spot On/Pill"]
+GROOMING_SERVICES = logic.GROOMING_SERVICES
+
+
+@app.route("/visits/new")
+@auth.permission_required("manage_visits")
+def visit_new_start():
+    return render_template("visit_new_start.html")
+
+
+@app.route("/visits/new/existing", methods=["GET", "POST"])
+@auth.permission_required("manage_visits")
+def visit_new_existing():
+    db = get_db()
+    if request.method == "POST":
+        patient_id = request.form.get("patient_id", "").strip()
+        if not patient_id or not db.execute("SELECT 1 FROM patients WHERE id=?", (patient_id,)).fetchone():
+            flash("Pick a patient from the search results before logging a visit.", "error")
+            return redirect(url_for("visit_new_existing"))
+        try:
+            vid = _create_visit(db, patient_id, request.form)
+        except BadDate as e:
+            flash(str(e), "error")
+            return redirect(url_for("visit_new_existing"))
+        except BadNumber:
+            flash("Weight and BCS must be valid numbers.", "error")
+            return redirect(url_for("visit_new_existing"))
+        return redirect(url_for("visit_detail", visit_id=vid))
+    return render_template("visit_new_existing.html", vets=vet_users(db), wellness_types=WELLNESS_TYPES,
+                            grooming_services=GROOMING_SERVICES)
+
+
+@app.route("/visits/new/new-patient", methods=["GET", "POST"])
+@auth.permission_required("manage_visits")
+def visit_new_patient():
+    db = get_db()
+    if request.method == "POST":
+        f = request.form
+        try:
+            owner_phone = normalize_phone(f.get("owner_phone"))
+        except BadPhone:
+            flash("That owner phone number doesn't look valid — check the digits and try again.", "error")
+            return redirect(url_for("visit_new_patient"))
+        oid = dbmod.next_id(db, "OW")
+        db.execute("INSERT INTO owners (id,name,phone,address) VALUES (?,?,?,?)",
+                  (oid, f["owner_name"], owner_phone, f.get("owner_address")))
+        auth.log_change(db, "owners", oid, "create")
+
+        pid = dbmod.next_id(db, "PT")
+        db.execute(
+            "INSERT INTO patients (id,owner_id,animal_name,species,sex,age_note,repro_status,housing) VALUES (?,?,?,?,?,?,?,?)",
+            (pid, oid, f["animal_name"], f["species"], f.get("sex"), f.get("age_note"), f.get("repro_status"), f.get("housing")),
+        )
+        auth.log_change(db, "patients", pid, "create")
+        db.commit()
+
+        try:
+            vid = _create_visit(db, pid, f)
+        except BadDate as e:
+            flash(str(e), "error")
+            return redirect(url_for("visit_new_patient"))
+        except BadNumber:
+            flash("Weight and BCS must be valid numbers.", "error")
+            return redirect(url_for("visit_new_patient"))
+        return redirect(url_for("visit_detail", visit_id=vid))
+    return render_template("visit_new_patient.html", vets=vet_users(db), wellness_types=WELLNESS_TYPES,
+                            grooming_services=GROOMING_SERVICES)
+
+
+def _create_visit(db, patient_id, f):
+    """
+    Creates a visit (and, if requested, its admitting inpatient case) from
+    submitted form data. Raises BadDate/BadNumber on invalid input rather
+    than handling the error itself — this is a helper called from inside
+    other routes, not a route itself, so it can't safely return a redirect
+    Response the way a view function does (a `return redirect(...)` here
+    would just become this function's return value, silently replacing the
+    visit ID the caller expects — see visit_new_existing()/
+    visit_new_patient() below, which catch these exceptions and are the
+    ones that actually flash + redirect).
+    """
+    vid = dbmod.next_id(db, "V")
+    admit_now = f.get("admit_inpatient") == "on"
+    visit_date = clean_date(f.get("date"), field="date") or date.today().isoformat()
+    wellness_needed = f.get("wellness_needed", "N")
+    grooming_needed = f.get("grooming_needed", "N")
+    grooming_services = ",".join(f.getlist("grooming_services")) if grooming_needed == "Y" else None
+    weight_kg = parse_money(f.get("weight_kg"))
+    bcs = parse_money(f.get("bcs"))
+    wellness_next_dose_date = (
+        clean_date(f.get("wellness_next_dose_date"), field="wellness_next_dose_date")
+        if wellness_needed == "Y" else None
+    )
+
+    db.execute(
+        """INSERT INTO visits (id,patient_id,visit_type,date,doctor,weight_kg,bcs,complaint,history,exam,treatment,
+           case_status,case_status_changed_at,updates_log,
+           followup_needed,followup_method,followup_reason,followup_date,followup_status,
+           wellness_needed,wellness_type,wellness_next_dose_date,wellness_contacted,wellness_contact_method,
+           grooming_needed,grooming_services,grooming_notes,grooming_admitted_items,grooming_status,grooming_contacted,
+           payment_status,created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (vid, patient_id, "Inpatient" if admit_now else "Outpatient", visit_date,
+         f.get("doctor"), weight_kg, bcs, f.get("complaint"), f.get("history"), None, None,
+         "Admitted to Inpatient" if admit_now else "Needs Filling", visit_date, None,
+         "N", None, None, None, "N/A",
+         wellness_needed, f.get("wellness_type") if wellness_needed == "Y" else None,
+         wellness_next_dose_date, "N", None,
+         grooming_needed, grooming_services, f.get("grooming_notes") if grooming_needed == "Y" else None,
+         f.get("grooming_admitted_items") if grooming_needed == "Y" else None,
+         "Waiting" if grooming_needed == "Y" else None, "N",
+         "N/A", session.get("user_id")),
+    )
+    auth.log_change(db, "visits", vid, "create")
+    if admit_now:
+        _create_inpatient_case(db, patient_id, vid, f.get("complaint"), visit_date, weight_kg, bcs)
+    db.commit()
+    return vid
+
+
+def _create_inpatient_case(db, patient_id, visit_id, complaint, admission_date, weight_kg=None, bcs=None):
+    cur = db.execute(
+        "INSERT INTO inpatient_cases (patient_id, visit_id, complaint, admission_date, weight_kg, bcs, dismissed, created_by) VALUES (?,?,?,?,?,?,false,?) RETURNING id",
+        (patient_id, visit_id, complaint, admission_date or date.today().isoformat(), weight_kg, bcs, session.get("user_id")),
+    )
+    case_id = cur.fetchone()["id"]
+    auth.log_change(db, "inpatient_cases", str(case_id), "create")
+    return case_id
+
+
+# ---------------------------------------------------------------------------
+# Visits (sortable + date filter)
+# ---------------------------------------------------------------------------
+@app.route("/visits")
+@auth.permission_required("manage_visits")
+def visits_list():
+    db = get_db()
+    sort = request.args.get("sort", "date")
+    day_filter = request.args.get("date")
+    search = request.args.get("q", "").strip()
+    page = get_page()
+
+    from_join = "FROM visits v JOIN patients p ON p.id=v.patient_id JOIN owners o ON o.id=p.owner_id"
+    params = []
+    where = []
+    if day_filter:
+        where.append("v.date=?")
+        params.append(day_filter)
+    if search:
+        where.append("(p.animal_name ILIKE ? OR o.name ILIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    total = db.execute(f"SELECT COUNT(*) c {from_join}{where_sql}", params).fetchone()["c"]
+
+    order_map = {
+        "date": "v.date DESC, v.id DESC",
+        "type": "v.visit_type ASC, v.date DESC",
+        "status": "v.case_status ASC, v.date DESC",
+        "payment": "v.payment_status ASC, v.date DESC",
+    }
+    q = f"SELECT v.*, p.animal_name, o.name as owner_name {from_join}{where_sql}"
+    q += " ORDER BY " + order_map.get(sort, order_map["date"])
+    q += " LIMIT ? OFFSET ?"
+
+    rows = [dict(r) for r in db.execute(q, params + [PER_PAGE, page_offset(page)]).fetchall()]
+    for r in rows:
+        r["billing"] = logic.visit_billing_summary(db, r["id"])
+    return render_template("visits_list.html", visits=rows, sort=sort, day_filter=day_filter or "", search=search,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/visits/<visit_id>")
+@auth.permission_required("manage_visits")
+def visit_detail(visit_id):
+    db = get_db()
+    visit = db.execute(
+        "SELECT v.*, p.animal_name, p.id as patient_id, o.name as owner_name, o.phone as owner_phone FROM visits v "
+        "JOIN patients p ON p.id=v.patient_id JOIN owners o ON o.id=p.owner_id WHERE v.id=?", (visit_id,)
+    ).fetchone()
+    if not visit:
+        flash("Visit not found.", "error")
+        return redirect(url_for("visits_list"))
+    billing_row = db.execute("SELECT * FROM billing WHERE visit_id=?", (visit_id,)).fetchone()
+    summary = logic.visit_billing_summary(db, visit_id)
+    payments = db.execute("SELECT * FROM payments WHERE visit_id=? ORDER BY date DESC", (visit_id,)).fetchall()
+    files = attach_mod.list_attachments(db, "visit", visit_id)
+    cap = auth.discount_cap_for(db)
+    return render_template("visit_detail.html", visit=visit, billing=billing_row, summary=summary,
+                            payments=payments, files=files, discount_cap=cap)
+
+
+@app.route("/visits/<visit_id>/edit", methods=["GET", "POST"])
+@auth.permission_required("manage_visits")
+def visit_edit(visit_id):
+    db = get_db()
+    visit = db.execute("SELECT * FROM visits WHERE id=?", (visit_id,)).fetchone()
+    if not visit:
+        flash("Visit not found.", "error")
+        return redirect(url_for("visits_list"))
+    if request.method == "POST":
+        f = request.form
+        wellness_needed = f.get("wellness_needed", "N")
+        grooming_needed = f.get("grooming_needed", "N")
+        grooming_services = ",".join(f.getlist("grooming_services")) if grooming_needed == "Y" else None
+        new_case_status = f.get("case_status", visit["case_status"])
+        status_changed_at = visit["case_status_changed_at"]
+        if new_case_status != visit["case_status"]:
+            status_changed_at = date.today().isoformat()
+
+        try:
+            edited_date = clean_date(f.get("date"), field="date")
+            edited_followup_date = clean_date(f.get("followup_date"), field="followup_date")
+            edited_wellness_next_dose_date = clean_date(f.get("wellness_next_dose_date"), field="wellness_next_dose_date") if wellness_needed == "Y" else None
+            edited_weight_kg = parse_money(f.get("weight_kg"))
+            edited_bcs = parse_money(f.get("bcs"))
+        except BadDate as e:
+            flash(str(e), "error")
+            return redirect(url_for("visit_edit", visit_id=visit_id))
+        except BadNumber:
+            flash("Weight and BCS must be valid numbers.", "error")
+            return redirect(url_for("visit_edit", visit_id=visit_id))
+
+        new_vals = {
+            "visit_type": f.get("visit_type"), "date": edited_date, "doctor": f.get("doctor"),
+            "weight_kg": edited_weight_kg, "bcs": edited_bcs,
+            "complaint": f.get("complaint"), "history": f.get("history"), "exam": f.get("exam"),
+            "treatment": f.get("treatment"), "case_status": new_case_status, "case_status_changed_at": status_changed_at,
+            "updates_log": f.get("updates_log"),
+            "followup_needed": f.get("followup_needed", "N"), "followup_method": f.get("followup_method") or None,
+            "followup_reason": f.get("followup_reason") or None, "followup_date": edited_followup_date,
+            "followup_status": f.get("followup_status", "N/A"),
+            "wellness_needed": wellness_needed, "wellness_type": f.get("wellness_type") if wellness_needed == "Y" else None,
+            "wellness_next_dose_date": edited_wellness_next_dose_date,
+            "wellness_contacted": f.get("wellness_contacted", "N"), "wellness_contact_method": f.get("wellness_contact_method") or None,
+            "grooming_needed": grooming_needed, "grooming_services": grooming_services,
+            "grooming_notes": f.get("grooming_notes") if grooming_needed == "Y" else None,
+            "grooming_admitted_items": f.get("grooming_admitted_items") if grooming_needed == "Y" else None,
+            "grooming_status": f.get("grooming_status") if grooming_needed == "Y" else None,
+            "grooming_contacted": f.get("grooming_contacted", "N"),
+            "payment_status": f.get("payment_status", "N/A"),
+        }
+        changes = auth.diff_dict(visit, new_vals)
+        db.execute(
+            """UPDATE visits SET visit_type=?, date=?, doctor=?, weight_kg=?, bcs=?, complaint=?, history=?, exam=?, treatment=?,
+               case_status=?, case_status_changed_at=?, updates_log=?, followup_needed=?, followup_method=?,
+               followup_reason=?, followup_date=?, followup_status=?, wellness_needed=?, wellness_type=?,
+               wellness_next_dose_date=?, wellness_contacted=?, wellness_contact_method=?, grooming_needed=?,
+               grooming_services=?, grooming_notes=?, grooming_admitted_items=?, grooming_status=?,
+               grooming_contacted=?, payment_status=? WHERE id=?""",
+            (*new_vals.values(), visit_id),
+        )
+        auth.log_change(db, "visits", visit_id, "update", changes)
+        db.commit()
+        flash("Visit updated.", "success")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    return render_template("visit_form_edit.html", visit=visit, case_statuses=CASE_STATUSES,
+                            followup_reasons=FOLLOWUP_REASONS, wellness_types=WELLNESS_TYPES,
+                            grooming_services=GROOMING_SERVICES, vets=vet_users(db))
+
+
+@app.route("/visits/<visit_id>/billing", methods=["POST"])
+@auth.permission_required("manage_visits")
+def visit_billing_save(visit_id):
+    db = get_db()
+    f = request.form
+    billing_type = f.get("billing_type", "Automatic")
+    if billing_type not in BILLING_TYPES:
+        flash("Billing type must be one of: " + ", ".join(BILLING_TYPES) + ".", "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    priced_lines = []
+    had_bad_number = had_bad_price = False
+    if billing_type == "Automatic":
+        # Same pattern as inpatient_billing_add(): each cart row is a
+        # validated search-result pick (price_id + qty_{id}), not typed
+        # free text, so an invalid price_id here only happens on a
+        # tampered request — skipped with a flash rather than a raw
+        # database error, same as inpatient's had_bad_price handling.
+        for pid in f.getlist("price_id"):
+            try:
+                qty = parse_money(f.get(f"qty_{pid}", "").strip())
+            except BadNumber:
+                had_bad_number = True
+                continue
+            if not qty or qty <= 0:
+                continue
+            price_row = db.execute(
+                "SELECT name, category, sale_price, cost_price FROM price_list WHERE id=?", (pid,)
+            ).fetchone()
+            if not price_row:
+                had_bad_price = True
+                continue
+            priced_lines.append({
+                "price_id": pid, "name": price_row["name"], "category": price_row["category"],
+                "quantity": qty, "unit_price": price_row["sale_price"], "unit_cost": price_row["cost_price"],
+            })
+        if not priced_lines:
+            flash("Add at least one billed item.", "error")
+            return redirect(url_for("visit_detail", visit_id=visit_id))
+    try:
+        manual_amount = parse_money(f.get("manual_amount")) if billing_type == "Manual" else None
+    except BadNumber:
+        flash("Manual amount must be a valid number.", "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    if billing_type == "Manual" and (manual_amount is None or manual_amount <= 0):
+        flash("Manual Entry requires a Billed Amount greater than 0.", "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    try:
+        date_billed = clean_date(f.get("date_billed"), field="date_billed")
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    notes = f.get("notes")
+    existing = db.execute("SELECT * FROM billing WHERE visit_id=?", (visit_id,)).fetchone()
+    old_month = logic.month_key(existing["date_billed"]) if existing else None
+    if existing:
+        db.execute("UPDATE billing SET billing_type=?, manual_amount=?, date_billed=?, notes=? WHERE visit_id=?",
+                   (billing_type, manual_amount, date_billed, notes, visit_id))
+    else:
+        db.execute("INSERT INTO billing (visit_id, billing_type, manual_amount, date_billed, notes) VALUES (?,?,?,?,?)",
+                   (visit_id, billing_type, manual_amount, date_billed, notes))
+    if billing_type == "Automatic":
+        # Snapshot the current Price List values for every item in the
+        # cart right now, at Save time — this is what stops a price edit
+        # next month from silently changing what this visit's bill (and
+        # the revenue/COGS report for the month it was billed) says today.
+        logic.save_visit_billing_lines(db, visit_id, priced_lines)
+    else:
+        # Switched to (or re-saved as) Manual — any prior Automatic
+        # snapshot for this visit no longer applies.
+        db.execute("DELETE FROM visit_billing_lines WHERE visit_id=?", (visit_id,))
+    logic.refresh_visit_billing_total(db, visit_id)
+    new_month = logic.month_key(date_billed)
+    logic.recompute_months_summary(db, [old_month, new_month])
+    auth.log_change(db, "billing", visit_id, "update" if existing else "create")
+    db.commit()
+    if had_bad_number:
+        flash("Some quantities weren't valid numbers and were skipped.", "error")
+    if had_bad_price:
+        flash("Some selected items no longer exist in the Price List and were skipped.", "error")
+    flash("Billing saved.", "success")
+    return redirect(url_for("visit_detail", visit_id=visit_id))
+
+
+@app.route("/visits/<visit_id>/discount", methods=["POST"])
+@auth.permission_required("manage_visits")
+def visit_discount_save(visit_id):
+    db = get_db()
+    try:
+        percent = parse_money(request.form.get("discount_percent")) or 0
+    except BadNumber:
+        flash("Discount must be a valid number.", "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    cap = auth.discount_cap_for(db)
+    if percent > cap or percent < 0:
+        flash(f"Discount must be between 0% and {cap}% for your role.", "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    if percent > 0:
+        summary = logic.visit_billing_summary(db, visit_id)
+        blocked = logic.non_discountable_line_names(db, [l["id"] for l in summary["lines"]])
+        if blocked:
+            flash(f"Can't apply a discount — this bill includes item(s) marked as not discountable: {', '.join(blocked)}.", "error")
+            return redirect(url_for("visit_detail", visit_id=visit_id))
+    existing = db.execute("SELECT * FROM billing WHERE visit_id=?", (visit_id,)).fetchone()
+    if existing:
+        db.execute("UPDATE billing SET discount_percent=?, discount_applied_by=? WHERE visit_id=?",
+                   (percent, session["user_id"], visit_id))
+    else:
+        db.execute("INSERT INTO billing (visit_id, discount_percent, discount_applied_by) VALUES (?,?,?)",
+                   (visit_id, percent, session["user_id"]))
+    logic.refresh_visit_billing_total(db, visit_id)
+    if existing and existing["date_billed"]:
+        logic.recompute_month_summary(db, logic.month_key(existing["date_billed"]))
+    auth.log_change(db, "billing", visit_id, "update", {"discount_percent": (existing["discount_percent"] if existing else 0, percent)})
+    db.commit()
+    flash(f"{percent:.0f}% discount applied.", "success")
+    return redirect(url_for("visit_detail", visit_id=visit_id))
+
+
+@app.route("/visits/<visit_id>/payment", methods=["POST"])
+@auth.permission_required("manage_visits")
+def visit_payment_add(visit_id):
+    db = get_db()
+    f = request.form
+    try:
+        amount = parse_money(f.get("amount"), required=True)
+    except BadNumber:
+        flash("Payment amount must be a valid number.", "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    if amount <= 0:
+        flash("Payment amount must be greater than 0.", "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    try:
+        payment_date = clean_date(f.get("date"), field="date") or date.today().isoformat()
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    db.execute("INSERT INTO payments (visit_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?)",
+              (visit_id, amount, f.get("method"), payment_date,
+               session["user_id"], f.get("notes")))
+    auth.log_change(db, "payments", visit_id, "create")
+    db.commit()
+    flash("Payment recorded.", "success")
+    return redirect(url_for("visit_detail", visit_id=visit_id))
+
+
+@app.route("/visits/<visit_id>/attachments", methods=["POST"])
+@auth.permission_required("manage_visits")
+def visit_attachment_upload(visit_id):
+    db = get_db()
+    patient_row = db.execute("SELECT patient_id FROM visits WHERE id=?", (visit_id,)).fetchone()
+    if patient_row is None:
+        flash("Visit not found.", "error")
+        return redirect(url_for("visits_list"))
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("No file selected.", "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    _, err = attach_mod.save_attachment(db, patient_row["patient_id"], "visit", visit_id, file, session["user_id"])
+    flash(err if err else "File uploaded.", "error" if err else "success")
+    return redirect(url_for("visit_detail", visit_id=visit_id))
+
+
+@app.route("/files/<path:relpath>")
+@auth.permission_required("manage_visits", "manage_inpatient")
+def serve_attachment(relpath):
+    # Matches the gate on attachment_delete() below — every other route
+    # that touches an attachment (viewing the visit/inpatient page that
+    # links here, deleting it) requires manage_visits or manage_inpatient.
+    # This route used to only require being logged in, which meant a role
+    # with neither permission could still fetch any X-ray/bloodwork file on
+    # the system if they had (or guessed) its URL.
+    db = get_db()
+    row = db.execute("SELECT relative_path FROM attachments WHERE relative_path=?", (relpath,)).fetchone()
+    if row is None:
+        flash("File not found.", "error")
+        return redirect(url_for("dashboard"))
+    return send_from_directory(attach_mod.UPLOAD_ROOT, relpath)
+
+
+@app.route("/attachments/<int:attachment_id>/delete", methods=["POST"])
+@auth.permission_required("manage_visits", "manage_inpatient")
+def attachment_delete(attachment_id):
+    """
+    Deletes one uploaded Additional Test / X-Ray — from both the database
+    and the uploads/ folder on disk — and records it in the audit log so
+    a removed file still shows up in Admin > Logins and Changes. Shared by
+    every place in the app that lists attachments (Visit Detail, Inpatient
+    Detail), since a visit's and an inpatient case's attachments both live
+    in the same `attachments` table — gated on either permission since a
+    Vet-only or Reception-only custom role could plausibly have just one.
+    """
+    db = get_db()
+    row = attach_mod.get_attachment(db, attachment_id)
+    if row is None:
+        flash("File not found — it may have already been deleted.", "error")
+        return redirect(request.referrer or url_for("dashboard"))
+
+    # Figure out which record this attachment belonged to, to redirect back
+    # to the right detail page and to know it's safe (same clinic record)
+    # for the person deleting it.
+    if row["visit_id"]:
+        redirect_target = url_for("visit_detail", visit_id=row["visit_id"])
+    elif row["inpatient_case_id"]:
+        redirect_target = url_for("inpatient_detail", case_id=row["inpatient_case_id"])
+    else:
+        redirect_target = url_for("dashboard")
+
+    deleted, err = attach_mod.delete_attachment(db, attachment_id)
+    if err:
+        flash(err, "error")
+        return redirect(redirect_target)
+    if deleted is None:
+        flash("File not found — it may have already been deleted.", "error")
+        return redirect(redirect_target)
+    # Matches every other delete route in the app (e.g. distributor_delete,
+    # price_list_delete): table_name + record_id is enough for Admin Logs
+    # to show "attachments / <id> / delete — whole record" for the day.
+    auth.log_change(db, "attachments", str(attachment_id), "delete")
+    db.commit()
+    flash(f"Deleted {deleted['original_name']}.", "success")
+    return redirect(redirect_target)
+
+
+# ---------------------------------------------------------------------------
+# Follow-ups
+# ---------------------------------------------------------------------------
+@app.route("/followups")
+@auth.permission_required("manage_followups")
+def followups_list():
+    db = get_db()
+    show_all = request.args.get("all") == "1"
+    page = get_page()
+    rows, total = logic.followups_page(db, only_pending=not show_all,
+                                        limit=PER_PAGE, offset=page_offset(page))
+    return render_template("followups_list.html", followups=rows, show_all=show_all,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/followups/<visit_id>/status", methods=["POST"])
+@auth.permission_required("manage_followups")
+def followup_status_update(visit_id):
+    db = get_db()
+    status = request.form.get("status")
+    old = db.execute("SELECT followup_status FROM visits WHERE id=?", (visit_id,)).fetchone()
+    db.execute("UPDATE visits SET followup_status=? WHERE id=?", (status, visit_id))
+    auth.log_change(db, "visits", visit_id, "update", {"followup_status": (old["followup_status"], status)})
+    db.commit()
+    flash("Follow-up status updated.", "success")
+    return redirect(request.referrer or url_for("followups_list"))
+
+
+# ---------------------------------------------------------------------------
+# Wellness
+# ---------------------------------------------------------------------------
+@app.route("/wellness")
+@auth.permission_required("manage_wellness")
+def wellness_list():
+    db = get_db()
+    page = get_page()
+    rows, total = logic.wellness_reminders_page(db, limit=PER_PAGE, offset=page_offset(page))
+    return render_template("wellness_list.html", rows=rows,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/wellness/<visit_id>/update", methods=["POST"])
+@auth.permission_required("manage_wellness")
+def wellness_update(visit_id):
+    db = get_db()
+    f = request.form
+    old = db.execute("SELECT wellness_contacted, wellness_contact_method FROM visits WHERE id=?", (visit_id,)).fetchone()
+    db.execute("UPDATE visits SET wellness_contacted=?, wellness_contact_method=? WHERE id=?",
+              (f.get("wellness_contacted", "N"), f.get("wellness_contact_method") or None, visit_id))
+    auth.log_change(db, "visits", visit_id, "update", {"wellness_contacted": (old["wellness_contacted"], f.get("wellness_contacted", "N"))})
+    db.commit()
+    flash("Wellness reminder updated.", "success")
+    return redirect(url_for("wellness_list"))
+
+
+# ---------------------------------------------------------------------------
+# Grooming
+# ---------------------------------------------------------------------------
+@app.route("/grooming")
+@auth.permission_required("manage_grooming")
+def grooming_list():
+    db = get_db()
+    include_finished = request.args.get("all") == "1"
+    page = get_page()
+    rows, total = logic.grooming_queue_page(db, include_finished=include_finished,
+                                             limit=PER_PAGE, offset=page_offset(page))
+    return render_template("grooming_list.html", rows=rows, include_finished=include_finished,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/grooming/<visit_id>/update", methods=["POST"])
+@auth.permission_required("manage_grooming")
+def grooming_update(visit_id):
+    db = get_db()
+    f = request.form
+    old = db.execute("SELECT grooming_status, grooming_contacted FROM visits WHERE id=?", (visit_id,)).fetchone()
+    db.execute("UPDATE visits SET grooming_status=?, grooming_contacted=? WHERE id=?",
+              (f.get("grooming_status"), f.get("grooming_contacted", "N"), visit_id))
+    auth.log_change(db, "visits", visit_id, "update", {"grooming_status": (old["grooming_status"], f.get("grooming_status"))})
+    db.commit()
+    flash("Grooming entry updated.", "success")
+    return redirect(url_for("grooming_list"))
+
+
+# ---------------------------------------------------------------------------
+# Price List (Admin only)
+# ---------------------------------------------------------------------------
+PRICE_CATEGORIES = ["Service", "Medicine", "Retail"]
+
+
+@app.route("/price-list")
+@auth.permission_required("manage_price_list")
+def price_list():
+    db = get_db()
+    cat = request.args.get("category")
+    search = request.args.get("q", "").strip()
+    page = get_page()
+    where = ["active=true"]
+    params = []
+    if cat:
+        where.append("category=?")
+        params.append(cat)
+    if search:
+        where.append("name ILIKE ?")
+        params.append(f"%{search}%")
+    where_sql = " WHERE " + " AND ".join(where)
+    total = db.execute(f"SELECT COUNT(*) c FROM price_list{where_sql}", params).fetchone()["c"]
+    q = f"SELECT * FROM price_list{where_sql} ORDER BY category, name LIMIT ? OFFSET ?"
+    rows = db.execute(q, params + [PER_PAGE, page_offset(page)]).fetchall()
+    inv_items = db.execute("SELECT id, name, cost_price FROM inventory_list WHERE active=true AND category='Retail' ORDER BY name").fetchall()
+    flagged_price, _ = logic.retail_consistency_flags(db)
+    return render_template("price_list.html", items=rows, categories=PRICE_CATEGORIES, active_cat=cat,
+                            inv_items=inv_items, search=search, flagged_price=flagged_price,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/price-list/new", methods=["POST"])
+@auth.permission_required("manage_price_list")
+def price_list_new():
+    db = get_db()
+    f = request.form
+    try:
+        cost_price = parse_money(f.get("cost_price"))
+        sale_price = parse_money(f.get("sale_price"))
+    except BadNumber:
+        flash("Cost Price and Sale Price must be valid numbers.", "error")
+        return redirect(url_for("price_list"))
+    if f.get("category") not in PRICE_CATEGORIES:
+        flash("Category must be one of: " + ", ".join(PRICE_CATEGORIES) + ".", "error")
+        return redirect(url_for("price_list"))
+    pid = dbmod.next_id(db, "P")
+    can_discount = f.get("can_discount") == "on"
+    db.execute(
+        "INSERT INTO price_list (id,name,category,cost_price,sale_price,notes,active,linked_item_id,can_discount) VALUES (?,?,?,?,?,?,true,?,?)",
+        (pid, f["name"], f["category"], cost_price, sale_price,
+         f.get("notes"), f.get("linked_item_id") or None, can_discount),
+    )
+    auth.log_change(db, "price_list", pid, "create")
+    db.commit()
+    flash(f"{pid} added to price list.", "success")
+    if not money.is_denomination_valid(sale_price):
+        flash("Heads up: this price isn't a multiple of 250 IQD — totals including this item "
+              "may need rounding at checkout (this is handled automatically).", "error")
+    return redirect(url_for("price_list"))
+
+
+@app.route("/price-list/bulk-edit", methods=["POST"])
+@auth.permission_required("manage_price_list")
+def price_list_bulk_edit():
+    """
+    Saves many Price List row edits in a single request instead of one
+    request per row. This matters a lot at scale: each row edit that
+    touches cost_price/sale_price triggers a full recompute of the
+    materialized financial summary (since billing/inpatient revenue and
+    COGS are looked up against the *current* Price List value — see
+    logic._revenue_and_cogs_by_month) — that full recompute is cheap once,
+    but doing it 50 separate times back-to-back for a 50-row bulk edit is
+    what actually caused the lag. Batching means it runs at most once
+    total, in one DB transaction, with one response instead of 50 full
+    page redirects being fetched and thrown away by the browser.
+    """
+    db = get_db()
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items") or []
+    saved, errors = [], {}
+    any_price_changed = False
+    for item in items:
+        item_id = str(item.get("id", ""))
+        fields = item.get("fields") or {}
+        try:
+            cost_price = parse_money(fields.get("cost_price"))
+            sale_price = parse_money(fields.get("sale_price"))
+        except BadNumber:
+            errors[item_id] = "Cost Price and Sale Price must be valid numbers."
+            continue
+        old = db.execute("SELECT * FROM price_list WHERE id=?", (item_id,)).fetchone()
+        if not old:
+            errors[item_id] = "Item not found."
+            continue
+        new_vals = {"name": fields.get("name", ""), "category": fields.get("category", ""),
+                    "cost_price": cost_price, "sale_price": sale_price, "notes": fields.get("notes"),
+                    "linked_item_id": (fields.get("linked_item_id") or None) if "linked_item_id" in fields else old["linked_item_id"],
+                    "can_discount": fields.get("can_discount") == "on"}
+        changes = auth.diff_dict(old, new_vals)
+        db.execute(
+            "UPDATE price_list SET name=?, category=?, cost_price=?, sale_price=?, notes=?, linked_item_id=?, can_discount=? WHERE id=?",
+            (*new_vals.values(), item_id),
+        )
+        if "cost_price" in changes or "sale_price" in changes:
+            any_price_changed = True
+        auth.log_change(db, "price_list", item_id, "update", changes)
+        saved.append(item_id)
+    if any_price_changed:
+        logic.recompute_full_summary(db)
+    db.commit()
+    return jsonify({"ok": len(errors) == 0, "saved": saved, "errors": errors})
+
+
+@app.route("/price-list/<item_id>/edit", methods=["POST"])
+@auth.permission_required("manage_price_list")
+def price_list_edit(item_id):
+    db = get_db()
+    f = request.form
+    try:
+        cost_price = parse_money(f.get("cost_price"))
+        sale_price = parse_money(f.get("sale_price"))
+    except BadNumber:
+        flash("Cost Price and Sale Price must be valid numbers.", "error")
+        return redirect(url_for("price_list"))
+    if f.get("category") not in PRICE_CATEGORIES:
+        flash("Category must be one of: " + ", ".join(PRICE_CATEGORIES) + ".", "error")
+        return redirect(url_for("price_list"))
+    old = db.execute("SELECT * FROM price_list WHERE id=?", (item_id,)).fetchone()
+    new_vals = {"name": f["name"], "category": f["category"], "cost_price": cost_price,
+                "sale_price": sale_price, "notes": f.get("notes"),
+                "linked_item_id": (f.get("linked_item_id") or None) if "linked_item_id" in f else old["linked_item_id"],
+                "can_discount": f.get("can_discount") == "on"}
+    changes = auth.diff_dict(old, new_vals)
+    db.execute("UPDATE price_list SET name=?, category=?, cost_price=?, sale_price=?, notes=?, linked_item_id=?, can_discount=? WHERE id=?",
+              (*new_vals.values(), item_id))
+    if "cost_price" in changes or "sale_price" in changes:
+        # Billing/inpatient revenue and COGS are computed against the
+        # *current* Price List value, not one frozen at transaction time —
+        # so a cost/sale price edit can retroactively change any past
+        # month that ever billed this code. Full rebuild is the only way
+        # to know which months without re-scanning anyway.
+        logic.recompute_full_summary(db)
+    auth.log_change(db, "price_list", item_id, "update", changes)
+    db.commit()
+    flash("Price updated.", "success")
+    if not money.is_denomination_valid(sale_price):
+        flash("Heads up: this price isn't a multiple of 250 IQD — totals including this item "
+              "may need rounding at checkout (this is handled automatically).", "error")
+    return redirect(url_for("price_list"))
+
+
+@app.route("/price-list/<item_id>/delete", methods=["POST"])
+@auth.permission_required("manage_price_list")
+def price_list_delete(item_id):
+    db = get_db()
+    db.execute("UPDATE price_list SET active=false WHERE id=?", (item_id,))
+    auth.log_change(db, "price_list", item_id, "delete")
+    db.commit()
+    flash("Item removed from price list.", "success")
+    return redirect(url_for("price_list"))
+
+
+# ---------------------------------------------------------------------------
+# Inventory catalog
+# ---------------------------------------------------------------------------
+INVENTORY_CATEGORIES = ["Medical", "Retail"]
+
+# Mirror the DB CHECK constraints (schema_postgres.sql) so a bypassed <select>
+# produces a clean flash message instead of a raw constraint-violation 500.
+RESOURCE_TYPES = ["vet", "grooming"]
+APPOINTMENT_TYPES = ["Medical", "Grooming"]
+BILLING_TYPES = ["Automatic", "Manual"]
+
+
+@app.route("/inventory-catalog")
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog():
+    db = get_db()
+    show_inactive = request.args.get("inactive") == "1"
+    search = request.args.get("q", "").strip()
+    page = get_page()
+    where = []
+    params = []
+    if not show_inactive:
+        where.append("i.active=true")
+    if search:
+        where.append("i.name ILIKE ?")
+        params.append(f"%{search}%")
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    total = db.execute(f"SELECT COUNT(*) c FROM inventory_list i{where_sql}", params).fetchone()["c"]
+    q = ("SELECT i.*, d.name as distributor_name FROM inventory_list i LEFT JOIN distributors d ON d.id=i.distributor_id"
+         + where_sql + " ORDER BY i.category, i.name LIMIT ? OFFSET ?")
+    rows = db.execute(q, params + [PER_PAGE, page_offset(page)]).fetchall()
+    distributors = db.execute("SELECT * FROM distributors ORDER BY name").fetchall()
+    _, flagged_inventory = logic.retail_consistency_flags(db)
+    return render_template("inventory_catalog.html", items=rows, distributors=distributors,
+                            show_inactive=show_inactive, categories=INVENTORY_CATEGORIES, search=search,
+                            flagged_inventory=flagged_inventory,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/inventory-catalog/new", methods=["POST"])
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog_new():
+    db = get_db()
+    f = request.form
+    try:
+        cost_price = parse_money(f.get("cost_price"))
+    except BadNumber:
+        flash("Cost Price must be a valid number.", "error")
+        return redirect(url_for("inventory_catalog"))
+    if f.get("category", "Medical") not in INVENTORY_CATEGORIES:
+        flash("Category must be one of: " + ", ".join(INVENTORY_CATEGORIES) + ".", "error")
+        return redirect(url_for("inventory_catalog"))
+    iid = dbmod.next_id(db, "INV")
+    db.execute(
+        "INSERT INTO inventory_list (id,name,category,unit,track_expiry,cost_price,distributor_id,active,notes) "
+        "VALUES (?,?,?,?,?,?,?,true,?)",
+        (iid, f["name"], f.get("category", "Medical"), f.get("unit"), f.get("track_expiry") == "on",
+         cost_price, f.get("distributor_id") or None, f.get("notes")),
+    )
+    auth.log_change(db, "inventory_list", iid, "create")
+    db.commit()
+    flash(f"{iid} added to inventory catalog.", "success")
+    return redirect(url_for("inventory_catalog"))
+
+
+@app.route("/inventory-catalog/bulk-edit", methods=["POST"])
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog_bulk_edit():
+    """Same batching rationale as price_list_bulk_edit — see that route's
+    docstring. One request, one transaction, at most one financial-summary
+    recompute for the whole batch instead of one per row.
+
+    Barcode is deliberately NOT one of the bulk-editable fields here — it
+    has its own dedicated Manage Barcode popup and routes (see
+    inventory_catalog_barcode_*), since it needs rules a plain text field
+    on this form can't enforce on its own: manual vs. generated are
+    mutually exclusive, and setting one has to be validated and confirmed
+    on its own, not silently swept up in a batch save of unrelated fields.
+    """
+    db = get_db()
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items") or []
+    saved, errors = [], {}
+    any_cost_changed = False
+    for item in items:
+        item_id = str(item.get("id", ""))
+        fields = item.get("fields") or {}
+        try:
+            cost_price = parse_money(fields.get("cost_price"))
+        except BadNumber:
+            errors[item_id] = "Cost Price must be a valid number."
+            continue
+        old = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+        if not old:
+            errors[item_id] = "Item not found."
+            continue
+        new_vals = {"name": fields.get("name", ""), "category": fields.get("category", "Medical"),
+                    "unit": fields.get("unit"), "track_expiry": fields.get("track_expiry") == "on",
+                    "cost_price": cost_price, "distributor_id": fields.get("distributor_id") or None,
+                    "notes": fields.get("notes", old["notes"]), "active": old["active"]}
+        changes = auth.diff_dict(old, new_vals)
+        db.execute(
+            "UPDATE inventory_list SET name=?, category=?, unit=?, track_expiry=?, cost_price=?, distributor_id=?, notes=?, active=? WHERE id=?",
+            (*new_vals.values(), item_id),
+        )
+        if "cost_price" in changes:
+            any_cost_changed = True
+        auth.log_change(db, "inventory_list", item_id, "update", changes)
+        saved.append(item_id)
+    if any_cost_changed:
+        logic.recompute_full_summary(db)
+    db.commit()
+    return jsonify({"ok": len(errors) == 0, "saved": saved, "errors": errors})
+
+
+@app.route("/inventory-catalog/<item_id>/edit", methods=["POST"])
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog_edit(item_id):
+    db = get_db()
+    f = request.form
+    try:
+        cost_price = parse_money(f.get("cost_price"))
+    except BadNumber:
+        flash("Cost Price must be a valid number.", "error")
+        return redirect(url_for("inventory_catalog"))
+    if f.get("category", "Medical") not in INVENTORY_CATEGORIES:
+        flash("Category must be one of: " + ", ".join(INVENTORY_CATEGORIES) + ".", "error")
+        return redirect(url_for("inventory_catalog"))
+    old = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+    new_vals = {"name": f["name"], "category": f.get("category", "Medical"), "unit": f.get("unit"),
+                "track_expiry": f.get("track_expiry") == "on", "cost_price": cost_price,
+                "distributor_id": f.get("distributor_id") or None, "notes": f.get("notes", old["notes"]),
+                "active": old["active"]}
+    changes = auth.diff_dict(old, new_vals)
+    db.execute(
+        "UPDATE inventory_list SET name=?, category=?, unit=?, track_expiry=?, cost_price=?, distributor_id=?, notes=?, active=? WHERE id=?",
+        (*new_vals.values(), item_id),
+    )
+    if "cost_price" in changes:
+        # Retail COGS is computed against the *current* inventory cost_price,
+        # not a value frozen at sale time — so this can retroactively change
+        # COGS for any past month that ever sold or refunded this item.
+        logic.recompute_full_summary(db)
+    auth.log_change(db, "inventory_list", item_id, "update", changes)
+    db.commit()
+    flash("Inventory item updated.", "success")
+    return redirect(url_for("inventory_catalog"))
+
+
+@app.route("/inventory-catalog/<item_id>/toggle-active", methods=["POST"])
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog_toggle(item_id):
+    db = get_db()
+    row = db.execute("SELECT active FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+    if row is None:
+        flash("Item not found.", "error")
+        return redirect(url_for("inventory_catalog"))
+    new_val = not row["active"]
+    db.execute("UPDATE inventory_list SET active=? WHERE id=?", (new_val, item_id))
+    auth.log_change(db, "inventory_list", item_id, "update", {"active": (row["active"], new_val)})
+    db.commit()
+    flash("Item " + ("reactivated." if new_val else "deactivated."), "success")
+    return redirect(url_for("inventory_catalog"))
+
+
+@app.route("/inventory-catalog/<item_id>/barcode/manual", methods=["POST"])
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog_barcode_manual(item_id):
+    """
+    Sets (or edits) a manually-entered barcode — the item's own real
+    barcode, typed in or scanned in directly. Mutually exclusive with a
+    generated one: this refuses to run if the item currently has a
+    *generated* barcode, same rule the Manage Barcode popup enforces on
+    the screen, checked again here since the screen greying out a button
+    isn't what actually protects the data — this is.
+    """
+    db = get_db()
+    item = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+    if not item:
+        return jsonify({"error": "Item not found."}), 404
+
+    payload = request.get_json(silent=True) or {}
+    raw = (payload.get("barcode") or "").strip()
+    if not raw:
+        return jsonify({"error": "Enter a barcode first."}), 400
+    if len(raw) > 64:
+        return jsonify({"error": "That's too long for a barcode — 64 characters max."}), 400
+    if not re.match(r"^[A-Za-z0-9 .\-_]+$", raw):
+        return jsonify({"error": "Barcodes can only contain letters, numbers, spaces, and - . _"}), 400
+
+    if item["barcode_source"] == "generated":
+        return jsonify({"error": "A barcode already exists for this item."}), 400
+
+    if raw != item["barcode"]:
+        dupe = db.execute(
+            "SELECT name FROM inventory_list WHERE barcode=? AND id!=?", (raw, item_id)
+        ).fetchone()
+        if dupe:
+            return jsonify({"error": f'That barcode is already used by "{dupe["name"]}".'}), 400
+
+    db.execute("UPDATE inventory_list SET barcode=?, barcode_source='manual' WHERE id=?", (raw, item_id))
+    auth.log_change(db, "inventory_list", item_id, "update", {"barcode": (item["barcode"], raw)})
+    db.commit()
+    return jsonify({"ok": True, "barcode": raw, "source": "manual"})
+
+
+@app.route("/inventory-catalog/<item_id>/barcode/generate", methods=["POST"])
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog_barcode_generate(item_id):
+    """
+    Creates a new internal barcode. Mutually exclusive with a manually-
+    entered one — refuses to run if the item already has *any* barcode set
+    up (manual or generated); Remove it first if you want a different
+    generated code, rather than silently replacing one in place.
+    """
+    db = get_db()
+    item = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+    if not item:
+        return jsonify({"error": "Item not found."}), 404
+    if item["barcode"]:
+        return jsonify({"error": "A barcode already exists for this item."}), 400
+
+    try:
+        code = barcode_mod.generate_barcode(db)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+
+    db.execute("UPDATE inventory_list SET barcode=?, barcode_source='generated' WHERE id=?", (code, item_id))
+    auth.log_change(db, "inventory_list", item_id, "update", {"barcode": (None, code)})
+    db.commit()
+    return jsonify({"ok": True, "barcode": code, "source": "generated",
+                     "label_url": url_for("inventory_barcode_label", item_id=item_id)})
+
+
+@app.route("/inventory-catalog/<item_id>/barcode/remove", methods=["POST"])
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog_barcode_remove(item_id):
+    """Clears whichever barcode is set — shared by both "Remove Barcode"
+    buttons in the popup (manual and generated), since the underlying
+    change is identical either way: wipe barcode and barcode_source back
+    to their unset state."""
+    db = get_db()
+    item = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+    if not item:
+        return jsonify({"error": "Item not found."}), 404
+    if not item["barcode"]:
+        return jsonify({"ok": True, "removed": False})
+
+    db.execute("UPDATE inventory_list SET barcode=NULL, barcode_source=NULL WHERE id=?", (item_id,))
+    auth.log_change(db, "inventory_list", item_id, "update", {"barcode": (item["barcode"], None)})
+    db.commit()
+    return jsonify({"ok": True, "removed": True})
+
+
+@app.route("/inventory-catalog/<item_id>/barcode/status")
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog_barcode_status(item_id):
+    """Current barcode state for an item — the Manage Barcode popup reads
+    this fresh every time it opens and after every action, instead of
+    trusting whatever it last had in memory, so it can never show a
+    stale/wrong state if the item changed some other way (another tab,
+    another staff member) since it was last opened."""
+    db = get_db()
+    item = db.execute("SELECT barcode, barcode_source, name FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+    if not item:
+        return jsonify({"error": "Item not found."}), 404
+    return jsonify({
+        "barcode": item["barcode"],
+        "source": item["barcode_source"],
+        "label_url": url_for("inventory_barcode_label", item_id=item_id) if item["barcode"] else None,
+    })
+
+
+@app.route("/inventory-catalog/<item_id>/barcode-label")
+@auth.permission_required("manage_inventory_catalog")
+def inventory_barcode_label(item_id):
+    db = get_db()
+    item = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+    if not item or not item["barcode"]:
+        flash("This item doesn't have a barcode yet.", "error")
+        return redirect(url_for("inventory_catalog"))
+    return render_template("barcode_label.html", item=item)
+
+
+# ---------------------------------------------------------------------------
+# Distributors
+# ---------------------------------------------------------------------------
+@app.route("/distributors")
+@auth.permission_required("manage_distributors")
+def distributors_list():
+    db = get_db()
+    search = request.args.get("q", "").strip()
+    if search:
+        rows = db.execute("SELECT * FROM distributors WHERE name ILIKE ? ORDER BY name", (f"%{search}%",)).fetchall()
+    else:
+        rows = db.execute("SELECT * FROM distributors ORDER BY name").fetchall()
+    outstanding = logic.distributor_outstanding_totals(db)
+    payables = logic.distributor_payables_summary(db)
+    return render_template("distributors.html", distributors=rows, search=search,
+                            outstanding=outstanding, payables=payables)
+
+
+@app.route("/distributors/new", methods=["POST"])
+@auth.permission_required("manage_distributors")
+def distributor_new():
+    db = get_db()
+    f = request.form
+    try:
+        phone = normalize_phone(f.get("phone"))
+    except BadPhone:
+        flash("That phone number doesn't look valid — check the digits and try again.", "error")
+        return redirect(url_for("distributors_list"))
+    try:
+        lead_time_days = parse_int(f.get("lead_time_days"))
+    except BadNumber:
+        flash("Lead Time (Days) must be a whole number.", "error")
+        return redirect(url_for("distributors_list"))
+    did = dbmod.next_id(db, "D")
+    db.execute(
+        "INSERT INTO distributors (id,name,contact_person,phone,email,catalog_link,lead_time_days,payment_terms,notes) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (did, f["name"], f.get("contact_person"), phone, f.get("email"), f.get("catalog_link"),
+         lead_time_days, f.get("payment_terms"), f.get("notes")),
+    )
+    auth.log_change(db, "distributors", did, "create")
+    db.commit()
+    flash(f"{did} added.", "success")
+    return redirect(url_for("distributors_list"))
+
+
+@app.route("/distributors/<dist_id>/edit", methods=["POST"])
+@auth.permission_required("manage_distributors")
+def distributor_edit(dist_id):
+    db = get_db()
+    f = request.form
+    try:
+        phone = normalize_phone(f.get("phone"))
+    except BadPhone:
+        flash("That phone number doesn't look valid — check the digits and try again.", "error")
+        return redirect(url_for("distributors_list"))
+    try:
+        lead_time_days = parse_int(f.get("lead_time_days"))
+    except BadNumber:
+        flash("Lead Time (Days) must be a whole number.", "error")
+        return redirect(url_for("distributors_list"))
+    old = db.execute("SELECT * FROM distributors WHERE id=?", (dist_id,)).fetchone()
+    new_vals = {"name": f["name"], "contact_person": f.get("contact_person"), "phone": phone,
+                "email": f.get("email"), "catalog_link": f.get("catalog_link"),
+                "lead_time_days": lead_time_days, "payment_terms": f.get("payment_terms"),
+                "notes": f.get("notes")}
+    changes = auth.diff_dict(old, new_vals)
+    db.execute(
+        "UPDATE distributors SET name=?, contact_person=?, phone=?, email=?, catalog_link=?, lead_time_days=?, payment_terms=?, notes=? WHERE id=?",
+        (*new_vals.values(), dist_id),
+    )
+    auth.log_change(db, "distributors", dist_id, "update", changes)
+    db.commit()
+    flash("Distributor updated.", "success")
+    return redirect(url_for("distributors_list"))
+
+
+@app.route("/distributors/<dist_id>/delete", methods=["POST"])
+@auth.permission_required("manage_distributors")
+def distributor_delete(dist_id):
+    db = get_db()
+    db.execute("DELETE FROM distributors WHERE id=?", (dist_id,))
+    auth.log_change(db, "distributors", dist_id, "delete")
+    db.commit()
+    flash("Distributor deleted.", "success")
+    return redirect(url_for("distributors_list"))
+
+
+# ---------------------------------------------------------------------------
+# Distributor Ledger — manual bookkeeping for what a distributor has billed
+# you and what you've paid them. Lump-sum bills only, no link to inventory,
+# POS, or any report; balance/status are always computed (never stored).
+# Reuses manage_distributors — no new permission for this.
+# ---------------------------------------------------------------------------
+@app.route("/distributors/<dist_id>")
+@auth.permission_required("manage_distributors")
+def distributor_detail(dist_id):
+    db = get_db()
+    dist = db.execute("SELECT * FROM distributors WHERE id=?", (dist_id,)).fetchone()
+    if not dist:
+        abort(404)
+    ledger = logic.distributor_ledger(db, dist_id)
+    return render_template("distributor_detail.html", distributor=dist, **ledger)
+
+
+@app.route("/distributors/<dist_id>/bills/new", methods=["POST"])
+@auth.permission_required("manage_distributors")
+def distributor_bill_new(dist_id):
+    db = get_db()
+    f = request.form
+    try:
+        total_amount = parse_money(f.get("total_amount"), required=True)
+    except BadNumber:
+        flash("Total amount must be a valid number.", "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
+    if total_amount <= 0:
+        flash("Total amount must be greater than zero.", "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
+    try:
+        bill_date = clean_date(f.get("bill_date"), field="bill_date") or date.today().isoformat()
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
+    bid = dbmod.next_id(db, "DB")
+    db.execute(
+        "INSERT INTO distributor_bills (id,distributor_id,bill_date,bill_reference,total_amount,notes,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (bid, dist_id, bill_date, f.get("bill_reference"), total_amount, f.get("notes"),
+         datetime.now().isoformat(timespec="seconds"), session.get("user_id")),
+    )
+    auth.log_change(db, "distributor_bills", bid, "create")
+    db.commit()
+    flash(f"Bill {bid} logged.", "success")
+    return redirect(url_for("distributor_detail", dist_id=dist_id))
+
+
+@app.route("/distributors/<dist_id>/bills/<bill_id>/delete", methods=["POST"])
+@auth.permission_required("manage_distributors")
+def distributor_bill_delete(dist_id, bill_id):
+    db = get_db()
+    has_payments = db.execute(
+        "SELECT 1 FROM distributor_bill_payments WHERE bill_id=? LIMIT 1", (bill_id,)
+    ).fetchone()
+    if has_payments:
+        flash("Delete the payments on this bill first.", "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
+    db.execute("DELETE FROM distributor_bills WHERE id=? AND distributor_id=?", (bill_id, dist_id))
+    auth.log_change(db, "distributor_bills", bill_id, "delete")
+    db.commit()
+    flash("Bill deleted.", "success")
+    return redirect(url_for("distributor_detail", dist_id=dist_id))
+
+
+@app.route("/distributors/<dist_id>/bills/<bill_id>/payments/new", methods=["POST"])
+@auth.permission_required("manage_distributors")
+def distributor_payment_new(dist_id, bill_id):
+    db = get_db()
+    f = request.form
+    bill = db.execute("SELECT * FROM distributor_bills WHERE id=? AND distributor_id=?", (bill_id, dist_id)).fetchone()
+    if not bill:
+        flash("Bill not found.", "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
+    try:
+        amount = parse_money(f.get("amount"), required=True)
+    except BadNumber:
+        flash("Payment amount must be a valid number.", "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
+    if amount <= 0:
+        flash("Payment amount must be greater than zero.", "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
+    try:
+        payment_date = clean_date(f.get("payment_date"), field="payment_date") or date.today().isoformat()
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
+    cur = db.execute(
+        "INSERT INTO distributor_bill_payments (bill_id,amount,payment_date,method,notes,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?,?) RETURNING id",
+        (bill_id, amount, payment_date, f.get("method"), f.get("notes"),
+         datetime.now().isoformat(timespec="seconds"), session.get("user_id")),
+    )
+    pid = cur.fetchone()["id"]
+    auth.log_change(db, "distributor_bill_payments", str(pid), "create")
+    db.commit()
+    flash("Payment recorded.", "success")
+    return redirect(url_for("distributor_detail", dist_id=dist_id))
+
+
+@app.route("/distributors/<dist_id>/payments/<int:payment_id>/delete", methods=["POST"])
+@auth.permission_required("manage_distributors")
+def distributor_payment_delete(dist_id, payment_id):
+    db = get_db()
+    db.execute("DELETE FROM distributor_bill_payments WHERE id=?", (payment_id,))
+    auth.log_change(db, "distributor_bill_payments", str(payment_id), "delete")
+    db.commit()
+    flash("Payment deleted.", "success")
+    return redirect(url_for("distributor_detail", dist_id=dist_id))
+
+
+@app.route("/distributors/<dist_id>/export.pdf")
+@auth.permission_required("manage_distributors")
+def distributor_export_pdf(dist_id):
+    db = get_db()
+    dist = db.execute("SELECT id FROM distributors WHERE id=?", (dist_id,)).fetchone()
+    if not dist:
+        abort(404)
+    buf = pdf_export.export_distributor_ledger(db, dist_id)
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"{dist_id}_ledger.pdf")
+
+
+# ---------------------------------------------------------------------------
+# Consignment — a distributor's stock sitting on your shelf; they're owed
+# cost_price per unit once it sells, you keep the markup. Consignment
+# items are ordinary Retail inventory_list rows (ownership_type=
+# 'Consignment') and already flow through POS/audit/P&L unmodified — this
+# section is the distributor-facing receiving/shrinkage/returns/
+# settlement layer on top of that shared data. See
+# Consignment_Feature_Framework.md and logic.py's "CONSIGNMENT" section
+# for the full picture these routes wire together.
+# ---------------------------------------------------------------------------
+@app.route("/consignment")
+@auth.permission_required("view_consignment")
+def consignment_overview():
+    db = get_db()
+    rows = logic.consignment_distributors_overview(db)
+    return render_template("consignment_overview.html", rows=rows)
+
+
+@app.route("/consignment/items")
+@auth.permission_required("view_consignment")
+def consignment_items():
+    db = get_db()
+    rows = db.execute(
+        "SELECT i.*, d.name AS distributor_name FROM inventory_list i "
+        "LEFT JOIN distributors d ON d.id = i.distributor_id "
+        "WHERE i.category='Retail' AND i.active=true ORDER BY i.ownership_type DESC, i.name"
+    ).fetchall()
+    distributors = db.execute("SELECT * FROM distributors ORDER BY name").fetchall()
+    locked = {r["id"]: logic.consignment_item_locked(db, r["id"]) for r in rows if r["ownership_type"] == "Consignment"}
+    return render_template("consignment_items.html", items=rows, distributors=distributors, locked=locked)
+
+
+@app.route("/consignment/items/<item_id>/flag", methods=["POST"])
+@auth.permission_required("manage_consignment_items")
+def consignment_item_flag(item_id):
+    db = get_db()
+    item = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+    if not item:
+        flash("Item not found.", "error")
+        return redirect(url_for("consignment_items"))
+    if item["category"] != "Retail":
+        flash("Only Retail items can be flagged as Consignment.", "error")
+        return redirect(url_for("consignment_items"))
+    if logic.consignment_item_locked(db, item_id):
+        flash("This item already has consignment activity against it — its distributor can't be changed. "
+              "Create a new inventory item for a different supply source instead.", "error")
+        return redirect(url_for("consignment_items"))
+    distributor_id = request.form.get("distributor_id") or None
+    if not distributor_id:
+        flash("Pick a distributor to flag this item as Consignment.", "error")
+        return redirect(url_for("consignment_items"))
+    try:
+        cost_price = parse_money(request.form.get("cost_price"), required=True)
+    except BadNumber:
+        flash("Cost Price is required and must be a valid number to flag an item as Consignment.", "error")
+        return redirect(url_for("consignment_items"))
+    db.execute(
+        "UPDATE inventory_list SET ownership_type='Consignment', distributor_id=?, cost_price=? WHERE id=?",
+        (distributor_id, cost_price, item_id),
+    )
+    auth.log_change(db, "inventory_list", item_id, "update",
+                     {"ownership_type": (item["ownership_type"], "Consignment")})
+    db.commit()
+    flash(f"{item['name']} flagged as Consignment.", "success")
+    return redirect(url_for("consignment_items"))
+
+
+@app.route("/consignment/items/<item_id>/unflag", methods=["POST"])
+@auth.permission_required("manage_consignment_items")
+def consignment_item_unflag(item_id):
+    db = get_db()
+    item = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
+    if not item or item["ownership_type"] != "Consignment":
+        flash("Item not found or not currently a Consignment item.", "error")
+        return redirect(url_for("consignment_items"))
+    if logic.consignment_item_locked(db, item_id):
+        flash("This item already has consignment activity against it and can't be unflagged — "
+              "any remaining shelf stock should go through Consignment > Returns first.", "error")
+        return redirect(url_for("consignment_items"))
+    db.execute("UPDATE inventory_list SET ownership_type='Owned' WHERE id=?", (item_id,))
+    auth.log_change(db, "inventory_list", item_id, "update", {"ownership_type": ("Consignment", "Owned")})
+    db.commit()
+    flash(f"{item['name']} is no longer flagged as Consignment.", "success")
+    return redirect(url_for("consignment_items"))
+
+
+def _consignment_item_choices(db):
+    """Consignment items for the Receiving/Shrinkage/Returns pickers,
+    each with its distributor attached so the form can filter/label."""
+    return db.execute(
+        "SELECT i.id, i.name, i.unit, i.cost_price, i.distributor_id, d.name AS distributor_name "
+        "FROM inventory_list i JOIN distributors d ON d.id = i.distributor_id "
+        "WHERE i.ownership_type='Consignment' AND i.active=true ORDER BY d.name, i.name"
+    ).fetchall()
+
+
+@app.route("/consignment/receiving")
+@auth.permission_required("view_consignment")
+def consignment_receiving_page():
+    db = get_db()
+    page = get_page()
+    total = db.execute("SELECT COUNT(*) c FROM consignment_receipts").fetchone()["c"]
+    rows = db.execute(
+        "SELECT cr.*, i.name AS item_name, d.name AS distributor_name FROM consignment_receipts cr "
+        "JOIN inventory_list i ON i.id=cr.item_id JOIN distributors d ON d.id=cr.distributor_id "
+        "ORDER BY cr.created_at DESC LIMIT ? OFFSET ?", (PER_PAGE, page_offset(page)),
+    ).fetchall()
+    return render_template("consignment_receiving.html", receipts=rows, items=_consignment_item_choices(db),
+                            today=date.today().isoformat(),
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/consignment/receiving/new", methods=["POST"])
+@auth.permission_required("manage_consignment_stock")
+def consignment_receiving_new():
+    db = get_db()
+    f = request.form
+    item_id = f.get("item_id")
+    item = db.execute("SELECT * FROM inventory_list WHERE id=? AND ownership_type='Consignment'", (item_id,)).fetchone()
+    if not item:
+        flash("Pick a Consignment item first.", "error")
+        return redirect(url_for("consignment_receiving_page"))
+    try:
+        quantity = parse_money(f.get("quantity"), required=True)
+        unit_cost = parse_money(f.get("unit_cost"), required=True)
+    except BadNumber:
+        flash("Quantity and Unit Cost must be valid numbers.", "error")
+        return redirect(url_for("consignment_receiving_page"))
+    if quantity <= 0:
+        flash("Quantity must be greater than 0.", "error")
+        return redirect(url_for("consignment_receiving_page"))
+    try:
+        received_date = clean_date(f.get("received_date"), field="received_date") or date.today().isoformat()
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("consignment_receiving_page"))
+    logic.record_consignment_receipt(db, item_id, item["distributor_id"], quantity, unit_cost,
+                                      received_date, f.get("delivery_reference"), f.get("notes"), session["user_id"])
+    auth.log_change(db, "consignment_receipts", item_id, "create")
+    db.commit()
+    flash(f"Received {quantity:g} {item['name']}.", "success")
+    return redirect(url_for("consignment_receiving_page"))
+
+
+@app.route("/consignment/shrinkage")
+@auth.permission_required("view_consignment")
+def consignment_shrinkage_page():
+    db = get_db()
+    page = get_page()
+    total = db.execute("SELECT COUNT(*) c FROM consignment_shrinkage").fetchone()["c"]
+    rows = db.execute(
+        "SELECT cs.*, i.name AS item_name, d.name AS distributor_name FROM consignment_shrinkage cs "
+        "JOIN inventory_list i ON i.id=cs.item_id JOIN distributors d ON d.id=cs.distributor_id "
+        "ORDER BY cs.logged_at DESC LIMIT ? OFFSET ?", (PER_PAGE, page_offset(page)),
+    ).fetchall()
+    return render_template("consignment_shrinkage.html", lines=rows, items=_consignment_item_choices(db),
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/consignment/shrinkage/new", methods=["POST"])
+@auth.permission_required("manage_consignment_stock")
+def consignment_shrinkage_new():
+    db = get_db()
+    f = request.form
+    item_id = f.get("item_id")
+    item = db.execute("SELECT * FROM inventory_list WHERE id=? AND ownership_type='Consignment'", (item_id,)).fetchone()
+    if not item:
+        flash("Pick a Consignment item first.", "error")
+        return redirect(url_for("consignment_shrinkage_page"))
+    try:
+        quantity = parse_money(f.get("quantity"), required=True)
+    except BadNumber:
+        flash("Quantity must be a valid number.", "error")
+        return redirect(url_for("consignment_shrinkage_page"))
+    if quantity <= 0:
+        flash("Quantity must be greater than 0.", "error")
+        return redirect(url_for("consignment_shrinkage_page"))
+    reason = f.get("reason")
+    if reason not in ("Damaged", "Expired", "Other"):
+        flash("Reason must be Damaged, Expired, or Other.", "error")
+        return redirect(url_for("consignment_shrinkage_page"))
+    # Default liability by reason (§9): Expired defaults to Distributor
+    # (bad stock rotation on their end), Damaged/Other default to Clinic
+    # (mishandled on-site) — either can be overridden per line.
+    default_liable = "Distributor" if reason == "Expired" else "Clinic"
+    liable_party = f.get("liable_party") or default_liable
+    if liable_party not in ("Distributor", "Clinic"):
+        flash("Liable Party must be Distributor or Clinic.", "error")
+        return redirect(url_for("consignment_shrinkage_page"))
+    overridden = liable_party != default_liable
+    ok, _, error = logic.record_consignment_shrinkage(
+        db, item_id, item["distributor_id"], quantity, reason, liable_party, overridden,
+        f.get("notes"), session["user_id"],
+    )
+    if not ok:
+        flash(error, "error")
+        return redirect(url_for("consignment_shrinkage_page"))
+    auth.log_change(db, "consignment_shrinkage", item_id, "create")
+    db.commit()
+    flash(f"Logged {quantity:g} {item['name']} as shrinkage ({liable_party} liable).", "success")
+    return redirect(url_for("consignment_shrinkage_page"))
+
+
+@app.route("/consignment/returns")
+@auth.permission_required("view_consignment")
+def consignment_returns_page():
+    db = get_db()
+    page = get_page()
+    total = db.execute("SELECT COUNT(*) c FROM consignment_returns").fetchone()["c"]
+    rows = db.execute(
+        "SELECT cr.*, i.name AS item_name, d.name AS distributor_name FROM consignment_returns cr "
+        "JOIN inventory_list i ON i.id=cr.item_id JOIN distributors d ON d.id=cr.distributor_id "
+        "ORDER BY cr.created_at DESC LIMIT ? OFFSET ?", (PER_PAGE, page_offset(page)),
+    ).fetchall()
+    return render_template("consignment_returns.html", returns=rows, items=_consignment_item_choices(db),
+                            today=date.today().isoformat(),
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/consignment/returns/new", methods=["POST"])
+@auth.permission_required("manage_consignment_stock")
+def consignment_returns_new():
+    db = get_db()
+    f = request.form
+    item_id = f.get("item_id")
+    item = db.execute("SELECT * FROM inventory_list WHERE id=? AND ownership_type='Consignment'", (item_id,)).fetchone()
+    if not item:
+        flash("Pick a Consignment item first.", "error")
+        return redirect(url_for("consignment_returns_page"))
+    try:
+        quantity = parse_money(f.get("quantity"), required=True)
+    except BadNumber:
+        flash("Quantity must be a valid number.", "error")
+        return redirect(url_for("consignment_returns_page"))
+    if quantity <= 0:
+        flash("Quantity must be greater than 0.", "error")
+        return redirect(url_for("consignment_returns_page"))
+    try:
+        return_date = clean_date(f.get("return_date"), field="return_date") or date.today().isoformat()
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("consignment_returns_page"))
+    ok, _, error = logic.record_consignment_return(
+        db, item_id, item["distributor_id"], quantity, return_date, f.get("reason"), f.get("notes"), session["user_id"],
+    )
+    if not ok:
+        flash(error, "error")
+        return redirect(url_for("consignment_returns_page"))
+    auth.log_change(db, "consignment_returns", item_id, "create")
+    db.commit()
+    flash(f"Returned {quantity:g} {item['name']} to {item['distributor_id']}.", "success")
+    return redirect(url_for("consignment_returns_page"))
+
+
+@app.route("/consignment/sales")
+@auth.permission_required("view_consignment")
+def consignment_sales_page():
+    db = get_db()
+    distributor_id = request.args.get("distributor_id") or None
+    date_from = request.args.get("date_from") or None
+    date_to = request.args.get("date_to") or None
+    rows = logic.consignment_sales_by_distributor(db, distributor_id, date_from, date_to)
+    distributors = db.execute(
+        "SELECT DISTINCT d.id, d.name FROM distributors d JOIN inventory_list i ON i.distributor_id=d.id "
+        "WHERE i.ownership_type='Consignment' ORDER BY d.name"
+    ).fetchall()
+    return render_template("consignment_sales.html", rows=rows, distributors=distributors,
+                            distributor_id=distributor_id, date_from=date_from or "", date_to=date_to or "")
+
+
+@app.route("/consignment/settlements/<distributor_id>")
+@auth.permission_required("manage_consignment_settlements")
+def consignment_settlements_page(distributor_id):
+    db = get_db()
+    distributor = db.execute("SELECT * FROM distributors WHERE id=?", (distributor_id,)).fetchone()
+    if not distributor:
+        flash("Distributor not found.", "error")
+        return redirect(url_for("consignment_overview"))
+    balance = logic.consignment_balance(db, distributor_id)
+    history = db.execute(
+        "SELECT s.*, u.full_name AS settled_by_name FROM consignment_settlements s "
+        "LEFT JOIN users u ON u.id=s.settled_by WHERE s.distributor_id=? ORDER BY s.created_at DESC",
+        (distributor_id,),
+    ).fetchall()
+    return render_template("consignment_settlements.html", distributor=distributor, balance=balance, history=history)
+
+
+@app.route("/consignment/settlements/<distributor_id>/new", methods=["POST"])
+@auth.permission_required("manage_consignment_settlements")
+def consignment_settlement_new(distributor_id):
+    db = get_db()
+    distributor = db.execute("SELECT * FROM distributors WHERE id=?", (distributor_id,)).fetchone()
+    if not distributor:
+        flash("Distributor not found.", "error")
+        return redirect(url_for("consignment_overview"))
+    # Recomputed fresh at submit time, not trusted from a hidden form
+    # field — the balance is a live figure (more could have sold since
+    # the page was opened) and this is a cash-recording action, not
+    # something to take on faith from the client.
+    balance = logic.consignment_balance(db, distributor_id)
+    try:
+        amount_paid = parse_money(request.form.get("amount_paid"), required=True)
+    except BadNumber:
+        flash("Amount Paid must be a valid number.", "error")
+        return redirect(url_for("consignment_settlements_page", distributor_id=distributor_id))
+    if amount_paid < 0:
+        flash("Amount Paid can't be negative.", "error")
+        return redirect(url_for("consignment_settlements_page", distributor_id=distributor_id))
+    amount_paid = money.round_to_denomination(amount_paid)
+    cur = db.execute(
+        "INSERT INTO consignment_settlements (distributor_id, period_start, period_end, amount_owed, amount_paid, "
+        "payment_method, notes, settled_by, created_at) VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
+        (distributor_id, balance["period_start"], balance["period_end"], balance["amount_owed"], amount_paid,
+         request.form.get("payment_method"), request.form.get("notes"), session["user_id"],
+         datetime.now().isoformat(timespec="seconds")),
+    )
+    settlement_id = cur.fetchone()["id"]
+    auth.log_change(db, "consignment_settlements", str(settlement_id), "create")
+    db.commit()
+    residual = round(balance["amount_owed"] - amount_paid, 2)
+    if residual > 0:
+        flash(f"Settlement recorded: {logic.fmt_money(amount_paid)} IQD paid of "
+              f"{logic.fmt_money(balance['amount_owed'])} IQD owed — {logic.fmt_money(residual)} IQD carries forward.", "success")
+    else:
+        flash(f"Settlement recorded: {logic.fmt_money(amount_paid)} IQD paid, settled in full.", "success")
+    return redirect(url_for("consignment_settlements_page", distributor_id=distributor_id))
+
+
+@app.route("/consignment/settlements/export/<int:settlement_id>")
+@auth.permission_required("manage_consignment_settlements")
+def consignment_settlement_export(settlement_id):
+    db = get_db()
+    settlement = db.execute("SELECT id FROM consignment_settlements WHERE id=?", (settlement_id,)).fetchone()
+    if not settlement:
+        flash("Settlement not found.", "error")
+        return redirect(url_for("consignment_overview"))
+    buf = pdf_export.export_consignment_settlement_pdf(db, settlement_id)
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"settlement_{settlement_id}.pdf")
+
+
+# ---------------------------------------------------------------------------
+# Inventory Status / Ordering Sheet
+# ---------------------------------------------------------------------------
+@app.route("/inventory-status")
+@auth.permission_required("view_inventory_status")
+def inventory_status_page():
+    db = get_db()
+    rows = logic.inventory_status(db)
+    filter_ = request.args.get("filter")
+    if filter_ == "low_stock":
+        rows = [r for r in rows if r["stock_status"] == "LOW STOCK"]
+    elif filter_ == "overdue":
+        rows = [r for r in rows if r["audit_status"] in ("OVERDUE", "Never audited")]
+    elif filter_ == "expiring":
+        rows = [r for r in rows if r["expiry_status"] in ("EXPIRING SOON", "EXPIRED")]
+    search = request.args.get("q", "").strip()
+    if search:
+        needle = search.lower()
+        rows = [r for r in rows if needle in (r["name"] or "").lower()]
+    return render_template("inventory_status.html", rows=rows, filter_=filter_, search=search)
+
+
+@app.route("/ordering-sheet")
+@auth.permission_required("manage_ordering_sheet")
+def ordering_sheet_page():
+    db = get_db()
+    rows = logic.ordering_sheet(db)
+    return render_template("ordering_sheet.html", rows=rows)
+
+
+# ---------------------------------------------------------------------------
+# Audit sessions (whole-catalog Save / Confirm)
+# ---------------------------------------------------------------------------
+@app.route("/audit-history")
+@auth.permission_required("manage_audit_history")
+def audit_history_list():
+    db = get_db()
+    page = get_page()
+    total = logic.count_audit_sessions(db)
+    sessions = logic.list_audit_sessions(db, limit=PER_PAGE, offset=page_offset(page))
+    return render_template("audit_sessions_list.html", sessions=sessions,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/audit-history/start", methods=["POST"])
+@auth.permission_required("manage_audit_history")
+def audit_session_start():
+    db = get_db()
+    session_id = logic.get_or_create_draft_session(db, date.today().isoformat(), session["user_id"])
+    return redirect(url_for("audit_session_view", session_id=session_id))
+
+
+@app.route("/audit-history/session/<int:session_id>")
+@auth.permission_required("manage_audit_history")
+def audit_session_view(session_id):
+    db = get_db()
+    sess = db.execute("SELECT s.*, u.full_name as performed_by_name FROM audit_sessions s "
+                      "LEFT JOIN users u ON u.id=s.performed_by WHERE s.id=?", (session_id,)).fetchone()
+    if not sess:
+        flash("Audit session not found.", "error")
+        return redirect(url_for("audit_history_list"))
+    items = db.execute("SELECT * FROM inventory_list WHERE active=true ORDER BY category, name").fetchall()
+    existing_lines = {r["item_id"]: dict(r) for r in db.execute(
+        "SELECT * FROM audit_session_lines WHERE session_id=?", (session_id,)).fetchall()}
+    # Effective (carried-forward) values from the last CONFIRMED audit, for placeholder display
+    confirmed_rows = logic.confirmed_audit_rows_by_item(db)
+    latest_confirmed = {}
+    for r in confirmed_rows:
+        latest_confirmed[r["item_id"]] = r
+    readonly = sess["status"] == "Confirmed"
+    return render_template("audit_session_view.html", sess=sess, items=items, existing_lines=existing_lines,
+                            latest_confirmed=latest_confirmed, readonly=readonly)
+
+
+def _save_audit_lines(db, session_id):
+    """Persists whatever count values are in the submitted form into
+    audit_session_lines. Shared by Save and Confirm so that clicking Confirm
+    directly (without Save first) can never silently discard the numbers
+    someone just typed in."""
+    items = db.execute("SELECT id FROM inventory_list WHERE active=true").fetchall()
+    for it in items:
+        iid = it["id"]
+        stock = request.form.get(f"stock_{iid}", "").strip()
+        if stock == "":
+            continue
+        received = request.form.get(f"received_{iid}", "").strip() or "0"
+        threshold = request.form.get(f"threshold_{iid}", "").strip()
+        critical = request.form.get(f"critical_{iid}", "").strip()
+        target = request.form.get(f"target_{iid}", "").strip()
+        expiry = request.form.get(f"expiry_{iid}", "").strip()
+        notes = request.form.get(f"notes_{iid}", "").strip()
+
+        try:
+            vals = (
+                float(stock), float(received),
+                float(threshold) if threshold else None,
+                (1 if critical == "Y" else (0 if critical == "N" else None)),
+                float(target) if target else None,
+                expiry or None, notes or None,
+            )
+        except ValueError:
+            raise BadNumber(iid)
+        # INSERT ... ON CONFLICT DO UPDATE instead of the old
+        # check-then-insert. The old pattern had a race window where two
+        # concurrent saves for the same session+item could both see "no
+        # existing row" and both insert, producing duplicate audit lines
+        # for the same item. That's now impossible at the database level
+        # (see uq_auditlines_session_item in schema_postgres.sql); this
+        # one statement handles "first save" and "resave" atomically, and
+        # without the extra per-item SELECT the old check needed.
+        db.execute(
+            "INSERT INTO audit_session_lines (session_id,item_id,stock_counted,received_since_prior,"
+            "reorder_threshold,critical_item,target_coverage_days,nearest_expiry_date,notes) "
+            "VALUES (?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT (session_id, item_id) DO UPDATE SET "
+            "stock_counted=EXCLUDED.stock_counted, received_since_prior=EXCLUDED.received_since_prior, "
+            "reorder_threshold=EXCLUDED.reorder_threshold, critical_item=EXCLUDED.critical_item, "
+            "target_coverage_days=EXCLUDED.target_coverage_days, "
+            "nearest_expiry_date=EXCLUDED.nearest_expiry_date, notes=EXCLUDED.notes",
+            (session_id, iid, *vals),
+        )
+
+
+@app.route("/audit-history/session/<int:session_id>/save", methods=["POST"])
+@auth.permission_required("manage_audit_history")
+def audit_session_save(session_id):
+    db = get_db()
+    sess = db.execute("SELECT * FROM audit_sessions WHERE id=?", (session_id,)).fetchone()
+    if not sess or sess["status"] != "Draft":
+        flash("This audit is confirmed and can no longer be edited.", "error")
+        return redirect(url_for("audit_history_list"))
+
+    try:
+        _save_audit_lines(db, session_id)
+    except BadNumber:
+        flash("Audit counts must be valid numbers. The draft was not saved — please correct the highlighted value(s).", "error")
+        return redirect(url_for("audit_session_view", session_id=session_id))
+    auth.log_change(db, "audit_sessions", str(session_id), "update")
+    db.commit()
+    flash("Audit saved. You can come back and finish it later, or confirm it once it's complete.", "success")
+    return redirect(url_for("audit_session_view", session_id=session_id))
+
+
+@app.route("/audit-history/session/<int:session_id>/confirm", methods=["POST"])
+@auth.permission_required("manage_audit_history")
+def audit_session_confirm(session_id):
+    db = get_db()
+    sess = db.execute("SELECT * FROM audit_sessions WHERE id=?", (session_id,)).fetchone()
+    if not sess or sess["status"] != "Draft":
+        flash("This audit is already confirmed.", "error")
+        return redirect(url_for("audit_history_list"))
+    try:
+        _save_audit_lines(db, session_id)
+    except BadNumber:
+        flash("Audit counts must be valid numbers. Nothing was confirmed — please correct the highlighted value(s).", "error")
+        return redirect(url_for("audit_session_view", session_id=session_id))
+
+    # Consignment shortfall check — before the UPDATE below, since that's
+    # what makes THIS session's counts the new baseline; "expected" needs
+    # to be the stock this count is actually being compared against (the
+    # previously confirmed baseline + transactions since), not the
+    # number this very confirm is about to establish. A shortfall here
+    # doesn't change what gets confirmed — it's purely informational, a
+    # nudge toward Consignment > Shrinkage if the gap wasn't just a
+    # counting difference (§10).
+    shortfalls = []
+    consignment_items = {r["id"]: r for r in db.execute(
+        "SELECT i.id, i.name, i.distributor_id, d.name AS distributor_name FROM inventory_list i "
+        "JOIN distributors d ON d.id = i.distributor_id WHERE i.ownership_type='Consignment'"
+    ).fetchall()}
+    if consignment_items:
+        counted_lines = db.execute(
+            "SELECT item_id, stock_counted FROM audit_session_lines WHERE session_id=? AND stock_counted IS NOT NULL",
+            (session_id,),
+        ).fetchall()
+        for line in counted_lines:
+            item = consignment_items.get(line["item_id"])
+            if not item:
+                continue
+            status = logic.inventory_status_by_id(db, line["item_id"])
+            expected = (status["current_stock"] if status else 0) or 0
+            counted = line["stock_counted"]
+            if counted < expected:
+                shortfalls.append(f"{item['name']} ({item['distributor_name']}): short {expected - counted:g}")
+
+    db.execute("UPDATE audit_sessions SET status='Confirmed', confirmed_at=? WHERE id=?",
+              (datetime.now().isoformat(timespec="seconds"), session_id))
+    auth.log_change(db, "audit_sessions", str(session_id), "update", {"status": ("Draft", "Confirmed")})
+    db.commit()
+    flash("Audit confirmed and locked. Inventory Status and Ordering Sheet now reflect these counts.", "success")
+    if shortfalls:
+        flash("Consignment item(s) came in under expected count — " + "; ".join(shortfalls) +
+              ". If this wasn't just a counting difference, log it as shrinkage from "
+              "Consignment > Shrinkage so it's reflected in what's owed.", "error")
+    return redirect(url_for("audit_session_view", session_id=session_id))
+
+
+# ---------------------------------------------------------------------------
+# Boarding
+# ---------------------------------------------------------------------------
+@app.route("/boarding")
+@auth.permission_required("manage_boarding")
+def boarding_page():
+    db = get_db()
+    show_all = request.args.get("all") == "1"
+    page = get_page()
+    count_where = "" if show_all else " WHERE dismissed=false"
+    total = db.execute(f"SELECT COUNT(*) c FROM boarding_sessions{count_where}").fetchone()["c"]
+    q = ("SELECT b.*, p.animal_name, p.species, o.id AS owner_id, o.name AS owner_name, o.phone AS owner_phone "
+         "FROM boarding_sessions b JOIN patients p ON p.id=b.patient_id JOIN owners o ON o.id=p.owner_id")
+    if not show_all:
+        q += " WHERE b.dismissed=false"
+    q += " ORDER BY b.entry_date DESC LIMIT ? OFFSET ?"
+    rows = [dict(r) for r in db.execute(q, (PER_PAGE, page_offset(page))).fetchall()]
+    for r in rows:
+        r["billing"] = logic.boarding_billing_summary(db, r["id"])
+        r["incident_count"] = db.execute(
+            "SELECT COUNT(*) c FROM boarding_incidents WHERE boarding_id=?", (r["id"],)
+        ).fetchone()["c"]
+    return render_template("boarding.html", sessions=rows, show_all=show_all, today=date.today().isoformat(),
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/boarding/new", methods=["POST"])
+@auth.permission_required("manage_boarding")
+def boarding_new():
+    db = get_db()
+    f = request.form
+    patient_id = f.get("patient_id")
+    if not patient_id:
+        flash("Pick a patient first.", "error")
+        return redirect(url_for("boarding_page"))
+    try:
+        price_per_day = parse_money(f.get("price_per_day"))
+        total = parse_money(f.get("total"))
+    except BadNumber:
+        flash("Price per Day and Total must be valid numbers.", "error")
+        return redirect(url_for("boarding_page"))
+    try:
+        entry_date = clean_date(f.get("entry_date"), field="entry_date") or date.today().isoformat()
+        dismissal_date = clean_date(f.get("dismissal_date"), field="dismissal_date")
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("boarding_page"))
+    if total is None:
+        total = logic.boarding_suggested_total(price_per_day, entry_date, dismissal_date)
+    special_needs = f.get("special_needs") == "on"
+    cur = db.execute(
+        "INSERT INTO boarding_sessions (patient_id, entry_date, dismissal_date, admitted_items, special_needs, "
+        "special_needs_notes, room, price_per_day, total, dismissed, created_by) VALUES (?,?,?,?,?,?,?,?,?,false,?) RETURNING id",
+        (patient_id, entry_date, dismissal_date, f.get("admitted_items"), special_needs,
+         f.get("special_needs_notes") if special_needs else None, f.get("room"), price_per_day, total,
+         session.get("user_id")),
+    )
+    boarding_id = cur.fetchone()["id"]
+    logic.refresh_boarding_total(db, boarding_id)
+    logic.recompute_month_summary(db, logic.month_key(entry_date))
+    auth.log_change(db, "boarding_sessions", str(boarding_id), "create")
+    db.commit()
+    flash("Boarding session added.", "success")
+    return redirect(url_for("boarding_page"))
+
+
+@app.route("/boarding/<int:boarding_id>/edit", methods=["POST"])
+@auth.permission_required("manage_boarding")
+def boarding_edit(boarding_id):
+    db = get_db()
+    f = request.form
+    old = db.execute("SELECT * FROM boarding_sessions WHERE id=?", (boarding_id,)).fetchone()
+    if not old:
+        flash("Boarding session not found.", "error")
+        return redirect(url_for("boarding_page"))
+    try:
+        price_per_day = parse_money(f.get("price_per_day"))
+        total = parse_money(f.get("total"))
+    except BadNumber:
+        flash("Price per Day and Total must be valid numbers.", "error")
+        return redirect(url_for("boarding_page"))
+    try:
+        entry_date = clean_date(f.get("entry_date"), field="entry_date") or old["entry_date"]
+        dismissal_date = clean_date(f.get("dismissal_date"), field="dismissal_date")
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("boarding_page"))
+    if total is None:
+        total = logic.boarding_suggested_total(price_per_day, entry_date, dismissal_date)
+    special_needs = f.get("special_needs") == "on"
+    new_vals = {
+        "entry_date": entry_date, "dismissal_date": dismissal_date, "admitted_items": f.get("admitted_items"),
+        "special_needs": special_needs, "special_needs_notes": f.get("special_needs_notes") if special_needs else None,
+        "room": f.get("room"), "price_per_day": price_per_day, "total": total,
+    }
+    changes = auth.diff_dict(old, new_vals)
+    db.execute(
+        "UPDATE boarding_sessions SET entry_date=?, dismissal_date=?, admitted_items=?, special_needs=?, "
+        "special_needs_notes=?, room=?, price_per_day=?, total=? WHERE id=?",
+        (*new_vals.values(), boarding_id),
+    )
+    logic.refresh_boarding_total(db, boarding_id)
+    old_month = logic.month_key(old["entry_date"])
+    new_month = logic.month_key(entry_date)
+    logic.recompute_months_summary(db, [old_month, new_month])
+    auth.log_change(db, "boarding_sessions", str(boarding_id), "update", changes)
+    db.commit()
+    flash("Boarding session updated.", "success")
+    return redirect(url_for("boarding_page"))
+
+
+@app.route("/boarding/<int:boarding_id>/dismiss", methods=["POST"])
+@auth.permission_required("manage_boarding")
+def boarding_dismiss(boarding_id):
+    db = get_db()
+    db.execute("UPDATE boarding_sessions SET dismissed=true, dismissal_date=COALESCE(dismissal_date, ?) WHERE id=?",
+               (date.today().isoformat(), boarding_id))
+    auth.log_change(db, "boarding_sessions", str(boarding_id), "update", {"dismissed": (False, True)})
+    db.commit()
+    flash("Marked as picked up.", "success")
+    return redirect(url_for("boarding_page"))
+
+
+@app.route("/boarding/<int:boarding_id>/incident", methods=["POST"])
+@auth.permission_required("manage_boarding")
+def boarding_incident(boarding_id):
+    db = get_db()
+    f = request.form
+    issue = (f.get("issue") or "").strip()
+    if not issue:
+        flash("Describe what's wrong before submitting.", "error")
+        return redirect(url_for("boarding_page"))
+    contacted = "Y" if f.get("contacted") == "on" else "N"
+    db.execute(
+        "INSERT INTO boarding_incidents (boarding_id, timestamp, issue, contacted, contact_method, response, user_id) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (boarding_id, datetime.now().isoformat(timespec="seconds"), issue, contacted,
+         f.get("contact_method") if contacted == "Y" else None, f.get("response"), session.get("user_id")),
+    )
+    db.commit()
+    flash("Incident logged.", "success")
+    return redirect(url_for("boarding_page"))
+
+
+@app.route("/boarding/<int:boarding_id>/payment", methods=["POST"])
+@auth.permission_required("manage_boarding")
+def boarding_payment(boarding_id):
+    db = get_db()
+    try:
+        amount = parse_money(request.form.get("amount")) or 0
+    except BadNumber:
+        flash("Payment amount must be a valid number.", "error")
+        return redirect(url_for("boarding_page"))
+    if amount <= 0:
+        flash("Payment amount must be greater than 0.", "error")
+        return redirect(url_for("boarding_page"))
+    db.execute(
+        "INSERT INTO payments (boarding_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?)",
+        (boarding_id, amount, request.form.get("method"), date.today().isoformat(),
+         session.get("user_id"), request.form.get("notes")),
+    )
+    auth.log_change(db, "payments", str(boarding_id), "create")
+    db.commit()
+    flash("Payment recorded.", "success")
+    return redirect(url_for("boarding_page"))
+
+
+@app.route("/boarding/<int:boarding_id>/export")
+@auth.permission_required("manage_boarding")
+def boarding_export_pdf(boarding_id):
+    db = get_db()
+    buf = pdf_export.export_boarding_pdf(db, boarding_id)
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"boarding_{boarding_id}.pdf")
+
+
+# ---------------------------------------------------------------------------
+# Point of Sale (Retail only)
+# ---------------------------------------------------------------------------
+@app.route("/pos")
+@auth.permission_required("process_pos_sales")
+def pos_page():
+    db = get_db()
+    cap = auth.discount_cap_for(db)
+    return render_template("pos.html", discount_cap=cap)
+
+
+@app.route("/pos/checkout", methods=["POST"])
+@auth.permission_required("process_pos_sales")
+def pos_checkout():
+    db = get_db()
+    f = request.form
+    item_ids = request.form.getlist("item_id")
+    quantities = request.form.getlist("quantity")
+    try:
+        discount_percent = parse_money(f.get("discount_percent")) or 0
+    except BadNumber:
+        flash("Discount must be a valid number.", "error")
+        return redirect(url_for("pos_page"))
+    cap = auth.discount_cap_for(db)
+    if discount_percent > cap or discount_percent < 0:
+        flash(f"Discount must be between 0% and {cap}% for your role.", "error")
+        return redirect(url_for("pos_page"))
+    if not item_ids:
+        flash("Cart is empty.", "error")
+        return redirect(url_for("pos_page"))
+    if discount_percent > 0:
+        blocked = logic.non_discountable_line_names_for_items(db, item_ids)
+        if blocked:
+            flash(f"Can't apply a discount — the cart includes item(s) marked as not discountable: {', '.join(blocked)}.", "error")
+            return redirect(url_for("pos_page"))
+
+    # Merge quantities for any item that appears in more than one cart line
+    # before checking stock. The normal UI cart already merges duplicates
+    # client-side, but nothing on the server enforced that — checking each
+    # submitted line against the *live* current_stock independently meant
+    # two lines of the same item (e.g. 3 + 3 against a stock of 5) could
+    # each individually pass the check and together oversell the item.
+    qty_by_item = {}
+    for iid, qty in zip(item_ids, quantities):
+        try:
+            qty = parse_money(qty, required=True)
+        except BadNumber:
+            flash("Cart quantities must be valid numbers.", "error")
+            return redirect(url_for("pos_page"))
+        if qty <= 0:
+            continue
+        qty_by_item[iid] = qty_by_item.get(iid, 0) + qty
+
+    subtotal, lines = 0, []
+    # Lock every cart item's inventory_list row up front, in a fixed order
+    # (sorted by id — never "the order items happen to be in this cart"),
+    # before computing or checking stock for any of them. This is what
+    # actually closes the oversell race: previously two concurrent
+    # checkouts for the same item could both read "5 in stock" before
+    # either had written its sale, and both would pass the check. Now the
+    # second checkout's SELECT ... FOR UPDATE blocks until the first
+    # checkout's transaction commits (or rolls back) and releases the
+    # lock, and Postgres gives that blocked SELECT a fresh read once it
+    # proceeds — so the stock check below always reflects any sale that
+    # just committed for the same item, not a stale snapshot from before
+    # this request started waiting. Locking every cart item in the same
+    # fixed order (regardless of the order either cart added them) is
+    # what prevents two carts sharing two items from deadlocking on each
+    # other (cart A locks item1 then waits on item2, while cart B locks
+    # item2 then waits on item1).
+    for iid in sorted(qty_by_item.keys()):
+        db.execute("SELECT id FROM inventory_list WHERE id=? FOR UPDATE", (iid,))
+
+    # Cost snapshot for COGS reporting — read once, right after locking,
+    # alongside the row lock above (not later): this is the cost that
+    # will actually be recorded against this sale, so it needs to come
+    # from the same point in time as everything else this transaction
+    # decides about these items.
+    cost_by_item = {r["id"]: r["cost_price"] for r in db.execute(
+        "SELECT id, cost_price FROM inventory_list WHERE id IN ({})".format(
+            ",".join("?" * len(qty_by_item))
+        ),
+        list(qty_by_item.keys()),
+    ).fetchall()} if qty_by_item else {}
+
+    for iid, qty in qty_by_item.items():
+        price = logic.item_sale_price(db, iid)
+        if price is None:
+            flash(f"Item {iid} has no sale price set in the Price List — skipped.", "error")
+            continue
+        status = logic.inventory_status_by_id(db, iid)
+        # current_stock is None until this item has been through at least
+        # one confirmed inventory audit (see logic.inventory_status()) —
+        # treated as zero available stock here (fail closed) rather than
+        # skipping the check, since skipping it let a never-audited item
+        # be oversold via POS with no limit at all, silently and
+        # deterministically (not just under a race). A clinic sells a
+        # brand-new item for the first time by running a quick audit on
+        # it first, same as any other item.
+        if status and status["current_stock"] is None:
+            flash(f"{status['name']} hasn't been through an inventory audit yet — run an audit before selling it.", "error")
+            return redirect(url_for("pos_page"))
+        if status and qty > status["current_stock"]:
+            flash(f"Only {status['current_stock']} {status['unit'] or ''} of {status['name']} in stock — sale blocked.", "error")
+            return redirect(url_for("pos_page"))
+        line_total = price * qty
+        subtotal += line_total
+        lines.append((iid, qty, price, line_total, cost_by_item.get(iid)))
+
+    if not lines:
+        flash("Nothing to sell.", "error")
+        return redirect(url_for("pos_page"))
+
+    total = money.round_to_denomination(subtotal * (1 - discount_percent / 100))
+    payment_method = f.get("payment_method")
+    cash_received = change_given = None
+    if payment_method == "Cash":
+        try:
+            cash_received = parse_money(f.get("cash_received"))
+        except BadNumber:
+            flash("Cash Received must be a valid number.", "error")
+            return redirect(url_for("pos_page"))
+        if cash_received is not None:
+            # Floored to the nearest 250 IQD note — never hand back more
+            # cash than owed; any shortfall (or a cash_received below the
+            # total) is absorbed by the clinic rather than shown negative.
+            change_given = max(money.round_to_denomination(cash_received - total, mode="down"), 0)
+    now = datetime.now().isoformat(timespec="seconds")
+    cur = db.execute(
+        "INSERT INTO sales (sale_date, cashier_id, subtotal, discount_percent, discount_applied_by, total, "
+        "payment_method, cash_received, change_given) VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
+        (now, session["user_id"], round(subtotal, 2), discount_percent,
+         session["user_id"] if discount_percent else None, total, payment_method, cash_received, change_given),
+    )
+    sale_id = cur.fetchone()["id"]
+    for iid, qty, price, line_total, unit_cost in lines:
+        db.execute("INSERT INTO sale_items (sale_id, item_id, quantity, unit_price, line_total, unit_cost) VALUES (?,?,?,?,?,?)",
+                  (sale_id, iid, qty, price, round(line_total, 2), unit_cost))
+        db.execute("INSERT INTO inventory_transactions (item_id, change_qty, reason, ref_id, timestamp, user_id) "
+                  "VALUES (?,?,?,?,?,?)", (iid, -qty, "sale", str(sale_id), now, session["user_id"]))
+    logic.recompute_month_summary(db, now[:7])
+    auth.log_change(db, "sales", str(sale_id), "create")
+    db.commit()
+    flash(f"Sale #{sale_id} completed — total {logic.fmt_money(total)} IQD.", "success")
+    return redirect(url_for("pos_receipt", sale_id=sale_id))
+
+
+@app.route("/pos/receipt/<int:sale_id>")
+@auth.permission_required("process_pos_sales", "view_sales_history")
+def pos_receipt(sale_id):
+    db = get_db()
+    sale = db.execute("SELECT * FROM sales WHERE id=?", (sale_id,)).fetchone()
+    if sale is None:
+        flash("Sale not found.", "error")
+        return redirect(url_for("pos_history"))
+    items = db.execute(
+        "SELECT si.*, i.name FROM sale_items si JOIN inventory_list i ON i.id=si.item_id WHERE si.sale_id=?", (sale_id,)
+    ).fetchall()
+    return render_template("pos_receipt.html", sale=sale, items=items)
+
+
+@app.route("/pos/history")
+@auth.permission_required("view_sales_history")
+def pos_history():
+    db = get_db()
+    page = get_page()
+    date_filter = request.args.get("date", "").strip() or None
+    where = " WHERE s.sale_date LIKE ?" if date_filter else ""
+    params = [date_filter + "%"] if date_filter else []
+    total = db.execute(f"SELECT COUNT(*) c FROM sales s{where}", params).fetchone()["c"]
+    sales = db.execute(
+        f"SELECT s.*, u.full_name as cashier_name FROM sales s LEFT JOIN users u ON u.id=s.cashier_id{where} "
+        "ORDER BY s.sale_date DESC LIMIT ? OFFSET ?", params + [PER_PAGE, page_offset(page)]
+    ).fetchall()
+    return render_template("pos_history.html", sales=sales, date_filter=date_filter,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+# ---------------------------------------------------------------------------
+# Inpatient system
+# ---------------------------------------------------------------------------
+@app.route("/inpatient")
+@auth.permission_required("manage_inpatient")
+def inpatient_list():
+    db = get_db()
+    show_all = request.args.get("all") == "1"
+    page = get_page()
+    count_where = "" if show_all else " WHERE dismissed=false"
+    total = db.execute(f"SELECT COUNT(*) c FROM inpatient_cases{count_where}").fetchone()["c"]
+    q = ("SELECT c.*, p.animal_name, o.name as owner_name FROM inpatient_cases c "
+         "JOIN patients p ON p.id=c.patient_id JOIN owners o ON o.id=p.owner_id")
+    if not show_all:
+        q += " WHERE c.dismissed=false"
+    q += " ORDER BY c.admission_date DESC LIMIT ? OFFSET ?"
+    cases = db.execute(q, (PER_PAGE, page_offset(page))).fetchall()
+    return render_template("inpatient_list.html", cases=cases, show_all=show_all,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/inpatient/new", methods=["GET", "POST"])
+@auth.permission_required("manage_inpatient")
+def inpatient_new():
+    db = get_db()
+    if request.method == "POST":
+        f = request.form
+        try:
+            new_weight_kg = parse_money(f.get("weight_kg"))
+            new_bcs = parse_money(f.get("bcs"))
+            new_admission_date = clean_date(f.get("admission_date"), field="admission_date")
+        except BadNumber:
+            flash("Weight and BCS must be valid numbers.", "error")
+            return redirect(url_for("inpatient_new"))
+        except BadDate as e:
+            flash(str(e), "error")
+            return redirect(url_for("inpatient_new"))
+        case_id = _create_inpatient_case(db, f["patient_id"], None, f.get("complaint"), new_admission_date,
+                                          new_weight_kg, new_bcs)
+        db.execute(
+            "UPDATE inpatient_cases SET exam_findings=?, admitted_items=?, attending_vet_id=?, supervising_vet_id=? WHERE id=?",
+            (f.get("exam_findings"), f.get("admitted_items"), f.get("attending_vet_id") or None,
+             f.get("supervising_vet_id") or None, case_id),
+        )
+        db.commit()
+        flash("Patient admitted.", "success")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
+    return render_template("inpatient_new.html", vets=vet_users(db))
+
+
+@app.route("/inpatient/<int:case_id>")
+@auth.permission_required("manage_inpatient")
+def inpatient_detail(case_id):
+    db = get_db()
+    case = db.execute(
+        "SELECT c.*, p.animal_name, p.species, p.sex, p.age_note, o.name as owner_name, o.phone as owner_phone, "
+        "p.id as patient_id FROM inpatient_cases c JOIN patients p ON p.id=c.patient_id "
+        "JOIN owners o ON o.id=p.owner_id WHERE c.id=?", (case_id,)
+    ).fetchone()
+    if not case:
+        flash("Inpatient case not found.", "error")
+        return redirect(url_for("inpatient_list"))
+
+    updates = db.execute("SELECT u.*, us.full_name FROM inpatient_updates u LEFT JOIN users us ON us.id=u.user_id "
+                         "WHERE case_id=? ORDER BY timestamp DESC", (case_id,)).fetchall()
+    contacts = db.execute("SELECT c.*, us.full_name FROM inpatient_contact_log c LEFT JOIN users us ON us.id=c.staff_user_id "
+                          "WHERE case_id=? ORDER BY timestamp DESC", (case_id,)).fetchall()
+    billing = logic.inpatient_billing_summary(db, case_id)
+    payments = db.execute("SELECT * FROM payments WHERE inpatient_case_id=? ORDER BY date DESC", (case_id,)).fetchall()
+    files = attach_mod.list_attachments(db, "inpatient", case_id)
+    cap = auth.discount_cap_for(db)
+
+    return render_template("inpatient_detail.html", case=case, updates=updates, recent_updates=updates[:3],
+                            contacts=contacts, recent_contacts=contacts[:3], billing=billing, payments=payments,
+                            vets=vet_users(db), files=files, discount_cap=cap)
+
+
+@app.route("/inpatient/<int:case_id>/edit", methods=["POST"])
+@auth.permission_required("manage_inpatient")
+def inpatient_edit(case_id):
+    db = get_db()
+    f = request.form
+    old = db.execute("SELECT * FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
+    dismissed = f.get("dismissed") == "on"
+    try:
+        edited_dismissal_date = clean_date(f.get("dismissal_date"), field="dismissal_date") if dismissed else None
+        edited_weight_kg = parse_money(f.get("weight_kg"))
+        edited_bcs = parse_money(f.get("bcs"))
+    except (BadDate, BadNumber) as e:
+        flash(str(e) if isinstance(e, BadDate) else "Weight and BCS must be valid numbers.", "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
+    new_vals = {
+        "complaint": f.get("complaint"), "exam_findings": f.get("exam_findings"),
+        "weight_kg": edited_weight_kg, "bcs": edited_bcs,
+        "admitted_items": f.get("admitted_items"), "dismissed": dismissed,
+        "dismissal_date": edited_dismissal_date,
+        "attending_vet_id": f.get("attending_vet_id") or None, "supervising_vet_id": f.get("supervising_vet_id") or None,
+    }
+    changes = auth.diff_dict(old, new_vals)
+    db.execute(
+        "UPDATE inpatient_cases SET complaint=?, exam_findings=?, weight_kg=?, bcs=?, admitted_items=?, dismissed=?, dismissal_date=?, "
+        "attending_vet_id=?, supervising_vet_id=? WHERE id=?", (*new_vals.values(), case_id),
+    )
+    auth.log_change(db, "inpatient_cases", str(case_id), "update", changes)
+    db.commit()
+    flash("Case updated.", "success")
+    return redirect(url_for("inpatient_detail", case_id=case_id))
+
+
+@app.route("/inpatient/<int:case_id>/update", methods=["POST"])
+@auth.permission_required("manage_inpatient")
+def inpatient_update_add(case_id):
+    db = get_db()
+    note = request.form.get("note", "").strip()
+    if note:
+        db.execute("INSERT INTO inpatient_updates (case_id, timestamp, note, user_id) VALUES (?,?,?,?)",
+                  (case_id, datetime.now().isoformat(timespec="seconds"), note, session["user_id"]))
+        auth.log_change(db, "inpatient_updates", str(case_id), "create")
+        db.commit()
+        flash("Update logged.", "success")
+    return redirect(url_for("inpatient_detail", case_id=case_id))
+
+
+@app.route("/inpatient/<int:case_id>/update/<int:update_id>/edit", methods=["POST"])
+@auth.permission_required("manage_inpatient")
+def inpatient_update_edit(case_id, update_id):
+    db = get_db()
+    note = request.form.get("note", "").strip()
+    old = db.execute("SELECT note FROM inpatient_updates WHERE id=? AND case_id=?", (update_id, case_id)).fetchone()
+    if old and note:
+        db.execute("UPDATE inpatient_updates SET note=? WHERE id=?", (note, update_id))
+        auth.log_change(db, "inpatient_updates", str(update_id), "update", {"note": (old["note"], note)})
+        db.commit()
+        flash("Update edited.", "success")
+    return redirect(url_for("inpatient_detail", case_id=case_id))
+
+
+@app.route("/inpatient/<int:case_id>/contact", methods=["POST"])
+@auth.permission_required("manage_inpatient")
+def inpatient_contact_add(case_id):
+    db = get_db()
+    f = request.form
+    picked_up = 1 if f.get("picked_up") == "yes" else 0
+    db.execute("INSERT INTO inpatient_contact_log (case_id, timestamp, picked_up, staff_user_id, notes) VALUES (?,?,?,?,?)",
+              (case_id, datetime.now().isoformat(timespec="seconds"), picked_up, session["user_id"], f.get("notes")))
+    auth.log_change(db, "inpatient_contact_log", str(case_id), "create")
+    db.commit()
+    flash("Contact attempt logged.", "success")
+    return redirect(url_for("inpatient_detail", case_id=case_id))
+
+
+@app.route("/inpatient/<int:case_id>/billing", methods=["POST"])
+@auth.permission_required("manage_inpatient")
+def inpatient_billing_add(case_id):
+    db = get_db()
+    price_ids = request.form.getlist("price_id")
+    now = datetime.now().isoformat(timespec="seconds")
+    added = 0
+    had_bad_number = False
+    had_bad_price = False
+    for pid in price_ids:
+        raw_qty = request.form.get(f"qty_{pid}", "").strip()
+        try:
+            qty = parse_money(raw_qty)
+        except BadNumber:
+            had_bad_number = True
+            continue
+        if not qty or qty <= 0:
+            continue
+        # Snapshot the current Price List sale price/cost right now, at
+        # the moment this procedure is added to the bill — same
+        # reasoning as visit billing's own snapshot-on-save: a price
+        # edit made next month shouldn't reach back and change what this
+        # stay's bill (or the revenue/COGS report for the month this was
+        # logged) says today. A price_id that doesn't match anything
+        # (the inpatient_billing.price_id FK would reject it anyway) is
+        # skipped with a clear flash instead of a raw database error.
+        price_row = db.execute("SELECT sale_price, cost_price FROM price_list WHERE id=?", (pid,)).fetchone()
+        if not price_row:
+            had_bad_price = True
+            continue
+        db.execute(
+            "INSERT INTO inpatient_billing (case_id, price_id, quantity, unit_price, unit_cost, logged_by, timestamp) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (case_id, pid, qty, price_row["sale_price"], price_row["cost_price"], session["user_id"], now),
+        )
+        added += 1
+    if added:
+        logic.refresh_inpatient_total(db, case_id)
+        logic.recompute_month_summary(db, now[:7])
+        auth.log_change(db, "inpatient_billing", str(case_id), "create")
+    db.commit()
+    if had_bad_number:
+        flash("Some quantities weren't valid numbers and were skipped.", "error")
+    if had_bad_price:
+        flash("Some selected items no longer exist in the Price List and were skipped.", "error")
+    if added:
+        flash(f"{added} procedure(s) added to the bill.", "success")
+    return redirect(url_for("inpatient_detail", case_id=case_id))
+
+
+@app.route("/inpatient/<int:case_id>/billing/<int:line_id>/delete", methods=["POST"])
+@auth.permission_required("manage_inpatient")
+def inpatient_billing_delete(case_id, line_id):
+    db = get_db()
+    row = db.execute("SELECT timestamp FROM inpatient_billing WHERE id=? AND case_id=?", (line_id, case_id)).fetchone()
+    db.execute("DELETE FROM inpatient_billing WHERE id=? AND case_id=?", (line_id, case_id))
+    logic.refresh_inpatient_total(db, case_id)
+    if row and row["timestamp"]:
+        logic.recompute_month_summary(db, row["timestamp"][:7])
+    auth.log_change(db, "inpatient_billing", str(line_id), "delete")
+    db.commit()
+    flash("Line removed.", "success")
+    return redirect(url_for("inpatient_detail", case_id=case_id))
+
+
+@app.route("/inpatient/<int:case_id>/discount", methods=["POST"])
+@auth.permission_required("manage_inpatient")
+def inpatient_discount_save(case_id):
+    db = get_db()
+    try:
+        percent = parse_money(request.form.get("discount_percent")) or 0
+    except BadNumber:
+        flash("Discount must be a valid number.", "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
+    cap = auth.discount_cap_for(db)
+    if percent > cap or percent < 0:
+        flash(f"Discount must be between 0% and {cap}% for your role.", "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
+    if percent > 0:
+        price_ids = [r["price_id"] for r in db.execute(
+            "SELECT DISTINCT price_id FROM inpatient_billing WHERE case_id=?", (case_id,)
+        ).fetchall()]
+        blocked = logic.non_discountable_line_names(db, price_ids)
+        if blocked:
+            flash(f"Can't apply a discount — this bill includes item(s) marked as not discountable: {', '.join(blocked)}.", "error")
+            return redirect(url_for("inpatient_detail", case_id=case_id))
+    old = db.execute("SELECT discount_percent FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
+    db.execute("UPDATE inpatient_cases SET discount_percent=?, discount_applied_by=? WHERE id=?",
+              (percent, session["user_id"], case_id))
+    logic.refresh_inpatient_total(db, case_id)
+    logic.recompute_months_summary(db, logic.months_touched_by_inpatient_case(db, case_id))
+    auth.log_change(db, "inpatient_cases", str(case_id), "update", {"discount_percent": (old["discount_percent"], percent)})
+    db.commit()
+    flash(f"{percent:.0f}% discount applied.", "success")
+    return redirect(url_for("inpatient_detail", case_id=case_id))
+
+
+@app.route("/inpatient/<int:case_id>/payment", methods=["POST"])
+@auth.permission_required("manage_inpatient")
+def inpatient_payment_add(case_id):
+    db = get_db()
+    f = request.form
+    try:
+        amount = parse_money(f.get("amount"), required=True)
+    except BadNumber:
+        flash("Payment amount must be a valid number.", "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
+    if amount <= 0:
+        flash("Payment amount must be greater than 0.", "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
+    try:
+        payment_date = clean_date(f.get("date"), field="date") or date.today().isoformat()
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
+    db.execute("INSERT INTO payments (inpatient_case_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?)",
+              (case_id, amount, f.get("method"), payment_date,
+               session["user_id"], f.get("notes")))
+    auth.log_change(db, "payments", str(case_id), "create")
+    db.commit()
+    flash("Payment recorded.", "success")
+    return redirect(url_for("inpatient_detail", case_id=case_id))
+
+
+@app.route("/inpatient/<int:case_id>/attachments", methods=["POST"])
+@auth.permission_required("manage_inpatient")
+def inpatient_attachment_upload(case_id):
+    db = get_db()
+    case = db.execute("SELECT patient_id FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("No file selected.", "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
+    _, err = attach_mod.save_attachment(db, case["patient_id"], "inpatient", case_id, file, session["user_id"])
+    flash(err if err else "File uploaded.", "error" if err else "success")
+    return redirect(url_for("inpatient_detail", case_id=case_id))
+
+
+# ---------------------------------------------------------------------------
+# Appointments
+# ---------------------------------------------------------------------------
+@app.route("/appointments")
+@auth.permission_required("manage_appointments")
+def appointments_page():
+    db = get_db()
+    today_iso = date.today().isoformat()
+    week_anchor = request.args.get("week", today_iso)
+    try:
+        logic.parse_date(week_anchor)
+    except ValueError:
+        flash("That week link wasn't valid, showing the current week instead.", "error")
+        week_anchor = today_iso
+    days = logic.week_dates(week_anchor)
+    selected_day = request.args.get("day", today_iso)
+    try:
+        logic.parse_date(selected_day)
+    except ValueError:
+        flash("That date wasn't valid, showing today instead.", "error")
+        selected_day = today_iso
+    columns, grid = logic.day_grid(db, selected_day)
+    prev_week = (days[0] - timedelta(days=7)).isoformat()
+    next_week = (days[0] + timedelta(days=7)).isoformat()
+    has_vet_columns = any(c["resource_type"] == "vet" for c in columns)
+    return render_template("appointments.html", days=days, selected_day=selected_day, columns=columns,
+                            grid=grid, week_anchor=week_anchor, prev_week=prev_week, next_week=next_week,
+                            today_iso=today_iso, has_vet_columns=has_vet_columns)
+
+
+@app.route("/appointments/new", methods=["POST"])
+@auth.permission_required("manage_appointments")
+def appointment_new():
+    db = get_db()
+    f = request.form
+    try:
+        appt_date = clean_date(f.get("appt_date"), field="appt_date")
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("appointments_page"))
+    if appt_date is None:
+        flash("Appointment date is required.", "error")
+        return redirect(url_for("appointments_page"))
+    slot_label = f["slot_label"]
+    resource_type = f.get("resource_type")
+    if resource_type not in RESOURCE_TYPES:
+        flash("Resource type must be one of: " + ", ".join(RESOURCE_TYPES) + ".", "error")
+        return redirect(url_for("appointments_page", day=appt_date))
+    appointment_type = f.get("appointment_type")
+    if appointment_type not in APPOINTMENT_TYPES:
+        flash("Appointment type must be one of: " + ", ".join(APPOINTMENT_TYPES) + ".", "error")
+        return redirect(url_for("appointments_page", day=appt_date))
+    resource_id = f.get("resource_id") or None
+
+    if logic.slot_conflict(db, appt_date, slot_label, resource_type, resource_id):
+        flash("That slot is already booked for this vet/groomer.", "error")
+        return redirect(url_for("appointments_page", day=appt_date))
+
+    # The check above is a friendly fast-path, not the real guarantee — two
+    # concurrent bookings for the same slot could both pass it before either
+    # inserts. The database's uq_appointments_slot unique index (see
+    # schema_postgres.sql) is what actually prevents the double-booking;
+    # this catches the resulting IntegrityError for whichever request loses
+    # that race and turns it into the same friendly message instead of a
+    # raw 500.
+    try:
+        db.execute(
+            "INSERT INTO appointments (appt_date, slot_label, resource_type, resource_id, pet_name, owner_name, "
+            "appointment_type, reason, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (appt_date, slot_label, resource_type, resource_id, f["pet_name"], f["owner_name"],
+             appointment_type, f.get("reason"), session["user_id"], datetime.now().isoformat(timespec="seconds")),
+        )
+        db.commit()
+    except dbmod.IntegrityError:
+        db.rollback()
+        flash("That slot is already booked for this vet/groomer.", "error")
+        return redirect(url_for("appointments_page", day=appt_date))
+    flash("Appointment booked.", "success")
+    return redirect(url_for("appointments_page", day=appt_date))
+
+
+@app.route("/appointments/<int:appt_id>/cancel", methods=["POST"])
+@auth.permission_required("manage_appointments")
+def appointment_cancel(appt_id):
+    db = get_db()
+    row = db.execute("SELECT appt_date FROM appointments WHERE id=?", (appt_id,)).fetchone()
+    db.execute("DELETE FROM appointments WHERE id=?", (appt_id,))
+    db.commit()
+    flash("Appointment cancelled.", "success")
+    return redirect(url_for("appointments_page", day=str(row["appt_date"]) if row else date.today().isoformat()))
+
+
+# ---------------------------------------------------------------------------
+# Reports: Monthly & Yearly P&L (Admin only)
+# ---------------------------------------------------------------------------
+@app.route("/reports")
+@auth.permission_required("view_financial_reports")
+def reports():
+    db = get_db()
+    pl = logic.monthly_pl(db)
+    opex_rows = db.execute("SELECT month, rent, salaries, utilities, marketing, other FROM monthly_opex").fetchall()
+    opex_by_month = {r["month"]: dict(r) for r in opex_rows}
+    return render_template("reports.html", pl=pl, opex_by_month=opex_by_month)
+
+
+@app.route("/reports/yearly")
+@auth.permission_required("view_financial_reports")
+def reports_yearly():
+    db = get_db()
+    all_pl = logic.yearly_pl(db)
+    page = get_page()
+    total = len(all_pl)
+    offset = page_offset(page)
+    pl = all_pl[offset:offset + PER_PAGE]
+    return render_template("reports_yearly.html", pl=pl,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/reports/rebuild", methods=["POST"])
+@auth.permission_required("view_financial_reports")
+def reports_rebuild_summary():
+    def task(update):
+        # Runs in a background thread — needs its own DB connection,
+        # since g.db belongs to this request and gets closed at request
+        # teardown long before a background thread finishes.
+        conn = dbmod.connect()
+        try:
+            def on_progress(done, total):
+                # recompute_full_summary reports real (done, total) month
+                # counts — translated here into jobs.py's update() shape:
+                # step 0 is this job's only step, with fraction giving the
+                # progress bar a real percentage instead of just jumping
+                # from 0% to 100% at the end. total==0 means it's still
+                # scanning the full billing/sales/inpatient history (the
+                # part with no natural sub-count to report), before month
+                # counts are even known — that scan is usually the slowest
+                # single part, so it gets its own label rather than
+                # leaving the bar looking stuck at 0% with no explanation.
+                if total:
+                    update(0, label=f"Rebuilding monthly summary ({done}/{total} months)",
+                           fraction=done / total)
+                else:
+                    update(0, label="Scanning billing, sales, and cost history\u2026", fraction=0.0)
+            logic.recompute_full_summary(conn, on_progress=on_progress)
+            conn.commit()
+            return {"ok": True, "message": "Report data rebuilt from current billing, sales, and cost data."}
+        except Exception as e:
+            conn.rollback()
+            return {"ok": False, "message": f"Rebuild failed: {e}"}
+        finally:
+            conn.close()
+
+    job_id = jobs.start(["Rebuilding monthly summary"], task)
+    return jsonify({"job_id": job_id})
+
+
+# ---------------------------------------------------------------------------
+# Insights (BI dashboard) & Retention (cohort analysis) — Admin only
+# ---------------------------------------------------------------------------
+@app.route("/insights")
+@auth.permission_required("view_insights_retention")
+def insights():
+    months_back = 12
+    cutoff = logic.month_list(months_back)[0] + "-01"
+
+    def compute(update):
+        # Runs in a background thread — no Flask request/g context exists
+        # here, so each query borrows its own connection from the shared
+        # pool rather than reusing anything tied to the request that
+        # kicked this off. Previously this opened 6 brand-new raw
+        # connections per page view (one per parallel job below); now it
+        # borrows and promptly returns up to 6 pooled connections, which
+        # is bounded by DB_POOL_MAX_SIZE instead of being unbounded.
+        def _run(fn):
+            con = dbmod.getconn()
+            try:
+                return fn(con)
+            finally:
+                # Read-only queries still open an implicit transaction
+                # (autocommit=False) — roll it back explicitly so the
+                # connection goes back to the pool clean, rather than
+                # relying on the pool's own defensive reset-on-return.
+                con.rollback()
+                dbmod.putconn(con)
+
+        job_defs = [
+            ("revenue", lambda c: logic.revenue_by_category(c, months_back=months_back)),
+            ("vets", lambda c: logic.vet_performance(c, months_back=months_back)),
+            ("clients", lambda c: logic.client_value(c, limit=20)),
+            ("weekday_load", lambda c: logic.appointment_weekday_load(c, months_back=months_back)),
+            ("occupancy", lambda c: logic.inpatient_boarding_occupancy(c, months_back=months_back)),
+            ("payment_mix", lambda c: [dict(r) for r in c.execute(
+                "SELECT method, COUNT(*) c, COALESCE(SUM(amount),0) total FROM payments "
+                "WHERE date >= ? GROUP BY method ORDER BY total DESC",
+                (cutoff,),
+            ).fetchall()]),
+        ]
+        results = {}
+        with ThreadPoolExecutor(max_workers=len(job_defs)) as ex:
+            futures = {ex.submit(_run, fn): name for name, fn in job_defs}
+            done = 0
+            # as_completed gives real progress: update() fires exactly
+            # when each section's own query actually finishes, not on a
+            # timer standing in for it.
+            for fut in as_completed(futures):
+                name = futures[fut]
+                results[name] = fut.result()
+                done += 1
+                update(done)
+
+        top_clients, avg_spend, active_client_count = results["clients"]
+        return {
+            "revenue": results["revenue"], "vets": results["vets"],
+            "top_clients": top_clients, "avg_spend": avg_spend,
+            "active_client_count": active_client_count,
+            "weekday_load": results["weekday_load"], "occupancy": results["occupancy"],
+            "payment_mix": results["payment_mix"], "months_back": months_back,
+        }
+
+    return _render_with_progress(
+        "insights.html",
+        ["Revenue by category", "Vet performance", "Client value",
+         "Weekday appointment load", "Inpatient/boarding occupancy", "Payment mix"],
+        compute,
+        page_title="Loading Insights",
+        page_note="Running six report queries in parallel \u2014 this can take a moment on a clinic with a lot of history.",
+    )
+
+
+@app.route("/retention")
+@auth.permission_required("view_insights_retention")
+def retention():
+    page = get_page()
+
+    def compute(update):
+        # Runs in a background thread, so its own connection (not g.db).
+        con = dbmod.connect()
+        try:
+            full = logic.cohort_retention_grid(con, max_offset=11)
+        finally:
+            con.close()
+        total = len(full["grid"])
+        total_pages = page_count(total)
+        eff_page = min(page, total_pages)
+        offset = page_offset(eff_page)
+        page_grid = full["grid"][offset:offset + PER_PAGE]
+        cohort = {"cohort_months": full["cohort_months"][offset:offset + PER_PAGE],
+                  "offsets": full["offsets"], "grid": page_grid}
+        return {"cohort": cohort, "page": eff_page, "total_pages": total_pages, "total_count": total}
+
+    return _render_with_progress(
+        "retention.html",
+        ["Computing cohort retention grid"],
+        compute,
+        page_title="Loading Retention",
+        page_note="This runs one query across your full visit history. There's no way to show finer-grained "
+                   "progress than \u201cstill working\u201d for a single query like this one, but it will finish.",
+    )
+
+
+@app.route("/refunds")
+@auth.permission_required("manage_refunds")
+def refunds_page():
+    db = get_db()
+    page = get_page()
+    date_filter = request.args.get("date", "").strip() or None
+    count_where = " WHERE refund_date = ?" if date_filter else ""
+    count_params = [date_filter] if date_filter else []
+    total = db.execute(f"SELECT COUNT(*) c FROM refunds{count_where}", count_params).fetchone()["c"]
+    refunds = logic.recent_refunds(db, limit=PER_PAGE, offset=page_offset(page), date_filter=date_filter)
+    return render_template("refunds.html", refunds=refunds, today=date.today().isoformat(),
+                            date_filter=date_filter,
+                            page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/refunds/retail", methods=["POST"])
+@auth.permission_required("manage_refunds")
+def refund_retail_save():
+    db = get_db()
+    f = request.form
+    item_ids = f.getlist("item_id")
+    quantities = f.getlist("quantity")
+    restock = f.get("restock") == "on"
+    reason = (f.get("reason") or "").strip()
+    try:
+        refund_date = clean_date(f.get("refund_date"), field="refund_date") or date.today().isoformat()
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("refunds_page"))
+
+    if not item_ids:
+        flash("No items scanned — nothing to refund.", "error")
+        return redirect(url_for("refunds_page"))
+
+    lines, total = [], 0
+    for iid, qty in zip(item_ids, quantities):
+        try:
+            qty = parse_money(qty, required=True)
+        except BadNumber:
+            flash("Refund quantities must be valid numbers.", "error")
+            return redirect(url_for("refunds_page"))
+        if qty <= 0:
+            continue
+        price = logic.item_sale_price(db, iid)
+        if price is None:
+            item_row = db.execute("SELECT name FROM inventory_list WHERE id=?", (iid,)).fetchone()
+            flash(f"{item_row['name'] if item_row else iid} has no sale price set in the Price List — skipped.", "error")
+            continue
+        line_total = round(price * qty, 2)
+        total += line_total
+        lines.append((iid, qty, price, line_total))
+
+    if not lines:
+        flash("Nothing to refund.", "error")
+        return redirect(url_for("refunds_page"))
+
+    now = datetime.now().isoformat(timespec="seconds")
+    cur = db.execute(
+        "INSERT INTO refunds (refund_type, refund_date, amount, restocked, reason, processed_by, created_at) "
+        "VALUES ('retail',?,?,?,?,?,?) RETURNING id",
+        (refund_date, money.round_to_denomination(total), restock, reason, session["user_id"], now),
+    )
+    refund_id = cur.fetchone()["id"]
+
+    for iid, qty, price, line_total in lines:
+        db.execute(
+            "INSERT INTO refund_items (refund_id, item_id, quantity, unit_price, line_total) VALUES (?,?,?,?,?)",
+            (refund_id, iid, qty, price, line_total),
+        )
+        if restock:
+            db.execute(
+                "INSERT INTO inventory_transactions (item_id, change_qty, reason, ref_id, timestamp, user_id) "
+                "VALUES (?,?,?,?,?,?)",
+                (iid, qty, "refund", str(refund_id), now, session["user_id"]),
+            )
+
+    logic.recompute_month_summary(db, logic.month_key(refund_date))
+    auth.log_change(db, "refunds", str(refund_id), "create")
+    db.commit()
+    flash(f"Refund of {total:,.0f} IQD recorded" + (" and stock restored." if restock else "."), "success")
+    return redirect(url_for("refunds_page"))
+
+
+@app.route("/refunds/service", methods=["POST"])
+@auth.permission_required("manage_refunds")
+def refund_service_save():
+    db = get_db()
+    f = request.form
+    try:
+        amount = parse_money(f.get("amount")) or 0
+    except BadNumber:
+        flash("Refund amount must be a valid number.", "error")
+        return redirect(url_for("refunds_page"))
+    reason = (f.get("reason") or "").strip()
+    try:
+        refund_date = clean_date(f.get("refund_date"), field="refund_date") or date.today().isoformat()
+    except BadDate as e:
+        flash(str(e), "error")
+        return redirect(url_for("refunds_page"))
+    visit_id = (f.get("visit_id") or "").strip() or None
+    case_id_raw = (f.get("inpatient_case_id") or "").strip()
+
+    if amount <= 0:
+        flash("Refund amount must be greater than 0.", "error")
+        return redirect(url_for("refunds_page"))
+
+    if visit_id and not db.execute("SELECT 1 FROM visits WHERE id=?", (visit_id,)).fetchone():
+        flash(f"Visit {visit_id} not found.", "error")
+        return redirect(url_for("refunds_page"))
+
+    case_id = None
+    if case_id_raw:
+        if not case_id_raw.isdigit() or not db.execute(
+            "SELECT 1 FROM inpatient_cases WHERE id=?", (int(case_id_raw),)
+        ).fetchone():
+            flash(f"Inpatient case {case_id_raw} not found.", "error")
+            return redirect(url_for("refunds_page"))
+        case_id = int(case_id_raw)
+
+    now = datetime.now().isoformat(timespec="seconds")
+    cur = db.execute(
+        "INSERT INTO refunds (refund_type, refund_date, amount, visit_id, inpatient_case_id, reason, processed_by, created_at) "
+        "VALUES ('service',?,?,?,?,?,?,?) RETURNING id",
+        (refund_date, money.round_to_denomination(amount), visit_id, case_id, reason, session["user_id"], now),
+    )
+    refund_id = cur.fetchone()["id"]
+    logic.recompute_month_summary(db, logic.month_key(refund_date))
+    auth.log_change(db, "refunds", str(refund_id), "create")
+    db.commit()
+    flash(f"Service refund of {amount:,.0f} IQD recorded.", "success")
+    return redirect(url_for("refunds_page"))
+
+
+@app.route("/reports/opex", methods=["POST"])
+@auth.permission_required("view_financial_reports")
+def reports_opex_save():
+    db = get_db()
+    f = request.form
+    month = f.get("month", "").strip()
+    if not month:
+        flash("Pick a month first.", "error")
+        return redirect(url_for("reports"))
+    try:
+        rent = parse_money(f.get("rent")) or 0
+        salaries = parse_money(f.get("salaries")) or 0
+        utilities = parse_money(f.get("utilities")) or 0
+        marketing = parse_money(f.get("marketing")) or 0
+        other = parse_money(f.get("other")) or 0
+    except BadNumber:
+        flash("Operating costs must be valid numbers.", "error")
+        return redirect(url_for("reports"))
+    db.execute(
+        """INSERT INTO monthly_opex (month, rent, salaries, utilities, marketing, other) VALUES (?,?,?,?,?,?)
+           ON CONFLICT(month) DO UPDATE SET rent=excluded.rent, salaries=excluded.salaries,
+           utilities=excluded.utilities, marketing=excluded.marketing, other=excluded.other""",
+        (month, rent, salaries, utilities, marketing, other),
+    )
+    auth.log_change(db, "monthly_opex", month, "update")
+    db.commit()
+    flash(f"Operating costs saved for {month}.", "success")
+    return redirect(url_for("reports"))
+
+
+# ---------------------------------------------------------------------------
+# Settings (Admin only)
+# ---------------------------------------------------------------------------
+@app.route("/settings", methods=["GET", "POST"])
+@auth.permission_required("manage_settings")
+def settings_page():
+    db = get_db()
+    if request.method == "POST":
+        # (field, min, max) — keeps schedule generation and alert windows sane.
+        NUMERIC_RANGES = {
+            "audit_overdue_days": (1, 3650),
+            "expiry_soon_days": (1, 3650),
+            "appt_slot_minutes": (5, 240),
+            "backup_retention": (1, 3650),
+        }
+        for key, (lo, hi) in NUMERIC_RANGES.items():
+            val = request.form.get(key)
+            if val is None or val.strip() == "":
+                continue
+            try:
+                n = int(val)
+            except ValueError:
+                flash(f"{key.replace('_', ' ').title()} must be a whole number.", "error")
+                return redirect(url_for("settings_page"))
+            if n < lo or n > hi:
+                flash(f"{key.replace('_', ' ').title()} must be between {lo} and {hi}.", "error")
+                return redirect(url_for("settings_page"))
+
+        # Time-of-day fields — validated as real HH:MM before anything else
+        # touches them. appt_start_time/appt_end_time feed straight into
+        # logic.generate_slots()'s datetime.strptime(..., "%H:%M") (used by
+        # Appointments, New Visit, Grooming, and Inpatient's vet pickers),
+        # and backup_time feeds scheduler.reschedule()'s CronTrigger — an
+        # unvalidated value there doesn't just break one page, it can raise
+        # at the next app *startup* (scheduler.start() runs unguarded before
+        # the server starts serving), making the whole app fail to launch
+        # until someone fixes the row directly in the database. The <input
+        # type="time"> in the template stops this in the normal UI, but
+        # that's client-side only, so it's validated here too.
+        TIME_FIELDS = ["appt_start_time", "appt_end_time", "backup_time"]
+        for key in TIME_FIELDS:
+            val = request.form.get(key)
+            if val is None or val.strip() == "":
+                continue
+            try:
+                datetime.strptime(val.strip(), "%H:%M")
+            except ValueError:
+                flash(f"{key.replace('_', ' ').title()} must be a valid time (HH:MM).", "error")
+                return redirect(url_for("settings_page"))
+
+        start = request.form.get("appt_start_time")
+        end = request.form.get("appt_end_time")
+        if start and end and start >= end:
+            flash("Day Ends At must be after Day Starts At.", "error")
+            return redirect(url_for("settings_page"))
+        for key in ["clinic_name", "clinic_location", "audit_overdue_days", "expiry_soon_days", "opening_date",
+                    "appt_start_time", "appt_end_time", "appt_slot_minutes",
+                    "backup_dir", "backup_time", "backup_retention"]:
+            val = request.form.get(key)
+            if val is not None:
+                old = logic.get_setting(db, key)
+                db.execute(
+                    "INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (key, val),
+                )
+                if old != val:
+                    auth.log_change(db, "settings", key, "update", {key: (old, val)})
+        db.commit()
+        if request.form.get("backup_time"):
+            import scheduler
+            scheduler.reschedule(request.form.get("backup_time"))
+        flash("Settings saved.", "success")
+        return redirect(url_for("settings_page"))
+    rows = db.execute("SELECT * FROM settings").fetchall()
+    settings = {r["key"]: r["value"] for r in rows}
+    import backup as backup_mod
+    import autostart
+    return render_template(
+        "settings.html", settings=settings, lan_address=lan_address(),
+        recent_backups=backup_mod.recent_backups(db),
+        recent_restores=backup_mod.recent_restores(db),
+        autostart_supported=autostart.is_supported(),
+        autostart_enabled=autostart.is_enabled(),
+        app_version=VERSION,
+    )
+
+
+@app.route("/settings/backup-now", methods=["POST"])
+@auth.permission_required("manage_settings")
+def settings_backup_now():
+    import backup as backup_mod
+
+    def task(update):
+        # Runs in a background thread — needs its own DB connection,
+        # since g.db belongs to this request and gets closed at request
+        # teardown long before a background thread finishes.
+        conn = dbmod.connect()
+        try:
+            ok, message = backup_mod.run_backup(conn, triggered_by="manual", on_progress=update)
+            return {"ok": ok, "message": message}
+        finally:
+            conn.close()
+
+    job_id = jobs.start(
+        ["Checking backup folder", "Dumping database", "Applying retention policy", "Done"],
+        task,
+    )
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/settings/restore-now", methods=["POST"])
+@auth.permission_required("manage_settings")
+def settings_restore_now():
+    source_file = (request.form.get("source_file") or "").strip()
+    import backup as backup_mod
+
+    # Path confinement + provenance check — only a .dump file inside the
+    # configured backup folder AND recorded in this app's own backup_log
+    # as a successful backup can be restored. Runs on the request's own
+    # (still-open) connection, before that connection is released and
+    # before any restore work starts, so an invalid/unauthorized path
+    # never gets anywhere near pg_restore.
+    ok, resolved_source, message = backup_mod.resolve_restorable_backup(get_db(), source_file)
+    if not ok:
+        flash(message, "error")
+        return redirect(url_for("settings_page"))
+
+    # pg_restore --clean issues DROP TABLE (and similar) against every
+    # table in the database — including ones this very request already
+    # touched, like `users` via require_login()'s lookup a moment ago.
+    # Postgres's DROP TABLE needs an exclusive lock, which has to wait for
+    # ANY other open transaction touching that table to finish — and since
+    # this connection doesn't use autocommit, it's still sitting in an
+    # open transaction holding exactly that kind of lock. Left alone,
+    # that's a real (and silent) hang: pg_restore waits on a lock this
+    # same request is holding, and this request won't release it until
+    # pg_restore returns. Postgres's deadlock detector doesn't catch this
+    # either — this connection isn't itself blocked on anything, it's
+    # just idle while Python waits on the subprocess — so there's no
+    # timeout and no error, just an indefinite wait. Closing this
+    # request's own connection before running the restore removes that
+    # lock entirely.
+    #
+    # This connection came from the shared pool (get_db() -> dbmod.getconn()),
+    # so it must go back through dbmod.putconn(), not a raw conn.close() —
+    # closing it directly here would leave the pool's own bookkeeping
+    # thinking a connection is still checked out, silently shrinking the
+    # pool's effective capacity by one every time someone restores.
+    conn = g.pop("db", None)
+    if conn is not None:
+        conn.commit()
+        dbmod.putconn(conn)
+
+    # The restore is about to DROP and recreate every table, including
+    # ones other pooled-but-idle connections still have cached statement
+    # plans / catalog snapshots for. Rather than leave those connections
+    # sitting in the pool across a restore, close the whole pool now —
+    # dbmod.getconn() will transparently open a fresh pool (and fresh
+    # connections) the next time any request needs one, once the restore
+    # has finished and pg_restore's own DROP/CREATE statements are the
+    # only thing touching the database.
+    dbmod.close_pool()
+
+    def task(update):
+        ok, message = backup_mod.run_restore(dbmod.connect, resolved_source,
+                                              triggered_by="manual", on_progress=update)
+        return {"ok": ok, "message": message}
+
+    job_id = jobs.start(
+        ["Checking backup file", "Restoring database", "Recording result", "Done"],
+        task,
+    )
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/settings/job-status")
+@auth.permission_required("manage_settings")
+def settings_job_status():
+    """Polled by the progress bars on Backup Now / Restore Now."""
+    job_id = request.args.get("job_id", "")
+    kind = request.args.get("kind", "")
+    state = jobs.status(job_id)
+    if state is None:
+        return jsonify({"status": "not_found"}), 404
+    payload = {
+        "status": state["status"],
+        "steps": state["steps"],
+        "current": state["current"],
+        "fraction": state.get("fraction"),
+        "started_at": state["started_at"],
+    }
+    if state["status"] == "done":
+        result = state.get("result") or {}
+        payload["ok"] = result.get("ok")
+        payload["message"] = result.get("message")
+        if kind == "restore" and result.get("ok"):
+            # The restore just replaced every row in the database,
+            # including `users` — force a fresh login on this browser
+            # rather than leaving a session tied to data that may no
+            # longer match what's actually there now.
+            session.clear()
+    elif state["status"] == "error":
+        payload["message"] = state.get("error")
+    return jsonify(payload)
+
+
+@app.route("/settings/autostart", methods=["POST"])
+@auth.permission_required("manage_settings")
+def settings_autostart():
+    import autostart
+    enable = request.form.get("autostart_enabled") == "on"
+    ok, message = autostart.enable() if enable else autostart.disable()
+    flash(message, "success" if ok else "error")
+    return redirect(url_for("settings_page"))
+
+
+@app.route("/settings/updates/check")
+@auth.permission_required("manage_settings")
+def settings_updates_check():
+    import updater
+    if not updater.is_configured():
+        return jsonify({"configured": False, "current_version": VERSION})
+    try:
+        available, latest = updater.is_update_available()
+    except Exception:
+        return jsonify({"configured": True, "current_version": updater.current_version(),
+                         "error": "Couldn't check for updates — offline, or GitHub is unreachable."}), 502
+    return jsonify({
+        "configured": True,
+        "current_version": updater.current_version(),
+        "available": available,
+        "latest_tag": latest.get("tag_name"),
+        "latest_body": latest.get("body"),
+    })
+
+
+@app.route("/settings/updates/apply", methods=["POST"])
+@auth.permission_required("manage_settings")
+def settings_updates_apply():
+    import updater
+    if not updater.is_configured():
+        return jsonify({"error": "Updates aren't set up on this install yet."}), 400
+    try:
+        available, latest = updater.is_update_available()
+    except Exception:
+        return jsonify({"error": "Couldn't check for updates — offline, or GitHub is unreachable."}), 502
+    if not available:
+        return jsonify({"error": "Already on the latest version."}), 400
+    tag_name, tarball_url = latest.get("tag_name"), latest.get("tarball_url")
+
+    def task(update):
+        ok, message = updater.apply_update(tag_name, tarball_url, on_progress=update)
+        return {"ok": ok, "message": message}
+
+    job_id = jobs.start(
+        ["Backing up database", "Downloading release", "Validating release",
+         "Applying database changes", "Verifying the new version", "Switching to the new version"],
+        task,
+    )
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/settings/updates/rollback", methods=["POST"])
+@auth.permission_required("manage_settings")
+def settings_updates_rollback():
+    import updater
+    if not updater.is_configured():
+        return jsonify({"error": "Updates aren't set up on this install yet."}), 400
+    candidates = [n for n in updater.list_releases() if n != updater.active_release_name()]
+    if not candidates:
+        return jsonify({"error": "No previous release available to roll back to."}), 400
+
+    def task(update):
+        update(0)
+        ok, message = updater.rollback_to_previous()
+        return {"ok": ok, "message": message}
+
+    job_id = jobs.start(["Rolling back"], task)
+    return jsonify({"job_id": job_id})
+
+
+if __name__ == "__main__":
+    try:
+        probe = dbmod.connect()
+        probe.execute("SELECT 1 FROM settings LIMIT 1")
+        probe.close()
+    except Exception as e:
+        raise SystemExit(
+            f"Could not reach the Postgres database ({e}).\n"
+            "Run: python3 setup.py first."
+        )
+
+    import scheduler
+    scheduler.start(get_db=dbmod.connect, close_db=lambda c: c.close())
+
+    def _graceful_shutdown(signum, frame):
+        """
+        Runs on SIGTERM/SIGINT (Ctrl-C)/SIGBREAK — sent by the OS on
+        shutdown/restart/logout, or by a person closing the launcher
+        window. Every write this app makes is already committed
+        per-request (see close_db/teardown_appcontext above), so there's
+        no in-flight "unsaved" transaction sitting on the server side to
+        lose here. What this actually guards against is Postgres (running
+        in Docker or as a local service) getting killed abruptly in the
+        same shutdown sequence with nothing recent to fall back on — so:
+        take one more backup as a last safety net, then exit cleanly
+        instead of being hard-killed mid-request.
+        """
+        print("\nVetzone IQ is shutting down \u2014 taking a final backup first...")
+        try:
+            db = dbmod.connect()
+            try:
+                import backup as backup_mod
+                ok, message = backup_mod.run_backup(db, triggered_by="shutdown")
+                print(message if ok else f"Final backup failed: {message}")
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"Could not take a final backup during shutdown: {e}")
+        # Closes every pooled connection cleanly rather than letting them
+        # get dropped mid-socket-close when the process exits.
+        dbmod.close_pool()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+    # Windows sends SIGBREAK (not SIGTERM) for Ctrl-Break / console-close —
+    # SIGTERM delivery there is only reliable when running as a proper
+    # Windows service, which this app doesn't. SIGINT (Ctrl-C) already
+    # works the same on both platforms.
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _graceful_shutdown)
+
+    if os.environ.get("VETZONE_DEV") == "1":
+        # Flask's dev server — convenient for local debugging only; not used
+        # for normal clinic operation.
+        app.run(debug=True, host="0.0.0.0", port=5050)
+    else:
+        from waitress import serve
+        # Configurable via env, defaulting to the same 0.0.0.0:5050 this
+        # has always used — an operator who wants to narrow exposure (e.g.
+        # bind only to a specific interface, or run behind a reverse
+        # proxy on a different port) can now do that without editing code.
+        # Waitress itself never terminates TLS (by its own design —
+        # BEHIND_TLS_PROXY above is how this app supports HTTPS: via a
+        # reverse proxy in front, not a certificate handed to serve()).
+        bind_host = os.environ.get("VETZONE_HOST", "0.0.0.0")
+        bind_port = int(os.environ.get("VETZONE_PORT", "5050"))
+        scheme = "https" if BEHIND_TLS_PROXY else "http"
+        print(f"Vetzone IQ is running — reachable on the clinic network at "
+              f"{scheme}://{lan_address()}:{bind_port}")
+        serve(app, host=bind_host, port=bind_port, threads=8)

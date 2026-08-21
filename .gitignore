@@ -1,0 +1,25 @@
+# Local config / secrets — never committed
+.env
+.env.audit_backup_check
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# App-generated, machine-local
+logs/
+uploads/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# The versioned-release layout (setup.py --enable-updates) lives OUTSIDE
+# this folder as siblings (../vetzone-data, ../vetzone-releases), so
+# there's nothing of theirs to ignore here — but if either ever ends up
+# nested under this repo by mistake, never track it.
+/vetzone-data/
+/vetzone-releases/

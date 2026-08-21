@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Log In — {{ clinic_name }}{% endblock %}
+{% block auth_content %}
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="brand" style="border:none; padding:0 0 18px; margin-bottom:6px; justify-content:center;">
+      <span class="mark">
+        <img class="brand-logo-light" src="{{ url_for('static', filename='logo-login-light.png') }}" alt="">
+        <img class="brand-logo-dark" src="{{ url_for('static', filename='logo-login-dark.png') }}" alt="">
+      </span>
+      <span class="brand-name" style="color:var(--ink);">{{ clinic_name }}</span>
+    </div>
+    <p class="page-sub" style="text-align:center; margin-bottom:22px;">{{ clinic_location }}</p>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field" style="margin-bottom:14px;">
+        <label>Username</label>
+        <input name="username" required autofocus>
+      </div>
+      <div class="field" style="margin-bottom:18px;">
+        <label>Password</label>
+        <input type="password" name="password" required>
+      </div>
+      <button class="btn" type="submit" style="width:100%; justify-content:center;">Log In</button>
+    </form>
+    {% if lockout_unlock_at %}
+    <p class="small muted" id="lockoutCountdown" style="text-align:center; margin-top:14px;"></p>
+    <script>
+      (function() {
+        var unlockAt = new Date("{{ lockout_unlock_at }}");
+        var el = document.getElementById('lockoutCountdown');
+        function tick() {
+          var msLeft = unlockAt - new Date();
+          if (msLeft <= 0) { el.textContent = 'You can try logging in again now.'; return; }
+          var totalSec = Math.ceil(msLeft / 1000);
+          var m = Math.floor(totalSec / 60);
+          var s = totalSec % 60;
+          el.textContent = 'Account locked — try again in ' + m + 'm ' + (s < 10 ? '0' : '') + s + 's.';
+          setTimeout(tick, 1000);
+        }
+        tick();
+      })();
+    </script>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

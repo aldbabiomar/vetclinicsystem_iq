@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ clinic_name }}{% endblock %}</title>
+<meta name="csrf-token" content="{{ csrf_token() }}">
+<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon-v2.ico') }}">
+<link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-v2-32.png') }}">
+<link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon-v2-180.png') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script>
+// Applied before first paint so switching themes never shows a flash of the other theme.
+(function() {
+  try {
+    var saved = localStorage.getItem('vetzoneiq-theme');
+    if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  } catch (e) {}
+})();
+</script>
+<script src="{{ url_for('static', filename='vendor/htmx.min.js') }}"></script>
+<script src="{{ url_for('static', filename='motion.js') }}"></script>
+<script src="{{ url_for('static', filename='toast.js') }}"></script>
+</head>
+<body>
+{% if session.get('user_id') %}
+<div class="mobile-topbar">
+  <button class="hamburger-btn" onclick="toggleSidebar()" aria-label="Open menu">
+    <span></span><span></span><span></span>
+  </button>
+  <span class="mobile-topbar-brand">{{ clinic_name }}</span>
+</div>
+<div class="sidebar-backdrop" onclick="closeSidebar()"></div>
+<div class="app-shell">
+  <nav class="sidebar">
+    <button class="sidebar-close-btn" onclick="closeSidebar()" aria-label="Close menu">&times;</button>
+    <div class="brand">
+      <span class="mark">
+        <img class="brand-logo-light" src="{{ url_for('static', filename='logo-sidebar-light.png') }}" alt="">
+        <img class="brand-logo-dark" src="{{ url_for('static', filename='logo-sidebar-dark.png') }}" alt="">
+      </span>
+      <span class="brand-name">{{ clinic_name }}</span>
+      <button type="button" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle dark mode">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4.2"/>
+          <path d="M12 2.5v2.6M12 18.9v2.6M4.6 4.6l1.85 1.85M17.55 17.55l1.85 1.85M2.5 12h2.6M18.9 12h2.6M4.6 19.4l1.85-1.85M17.55 6.45l1.85-1.85"/>
+        </svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="brand-sub">{{ clinic_location }}</div>
+
+    <div class="nav-group">
+      <a class="nav-link {{ 'active' if request.endpoint=='dashboard' }}" href="{{ url_for('dashboard') }}">
+        Dashboard {% if alert_count %}<span class="nav-badge">{{ alert_count }}</span>{% endif %}
+      </a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Patients &amp; Visits</div>
+      {% if has_permission('manage_owners') %}<a class="nav-link {{ 'active' if request.endpoint in ['owners_list','owner_new','owner_detail','owner_edit'] }}" href="{{ url_for('owners_list') }}">Owners</a>{% endif %}
+      {% if has_permission('manage_patients') %}<a class="nav-link {{ 'active' if request.endpoint in ['patients_list','patient_detail','patient_edit','patient_history'] }}" href="{{ url_for('patients_list') }}">Patients</a>{% endif %}
+      {% if has_permission('manage_visits') %}<a class="nav-link {{ 'active' if request.endpoint in ['visits_list','visit_new_start','visit_new_existing','visit_new_patient','visit_detail','visit_edit'] }}" href="{{ url_for('visits_list') }}">Visits</a>{% endif %}
+      {% if has_permission('manage_followups') %}<a class="nav-link {{ 'active' if request.endpoint=='followups_list' }}" href="{{ url_for('followups_list') }}">Follow-Ups</a>{% endif %}
+      {% if has_permission('manage_wellness') %}<a class="nav-link {{ 'active' if request.endpoint=='wellness_list' }}" href="{{ url_for('wellness_list') }}">Wellness</a>{% endif %}
+      {% if has_permission('manage_grooming') %}<a class="nav-link {{ 'active' if request.endpoint=='grooming_list' }}" href="{{ url_for('grooming_list') }}">Grooming</a>{% endif %}
+      {% if has_permission('manage_boarding') %}<a class="nav-link {{ 'active' if request.endpoint=='boarding_page' }}" href="{{ url_for('boarding_page') }}">Boarding</a>{% endif %}
+      {% if has_permission('manage_appointments') %}<a class="nav-link {{ 'active' if request.endpoint=='appointments_page' }}" href="{{ url_for('appointments_page') }}">Appointments</a>{% endif %}
+    </div>
+
+    {% if has_permission('manage_inpatient') %}
+    <div class="nav-group">
+      <div class="nav-label">Inpatient</div>
+      <a class="nav-link {{ 'active' if request.endpoint in ['inpatient_list','inpatient_new','inpatient_detail'] }}" href="{{ url_for('inpatient_list') }}">Inpatient Cases</a>
+    </div>
+    {% endif %}
+
+    {% set inventory_perms = ['view_inventory_status','manage_ordering_sheet','manage_audit_history','manage_inventory_catalog','manage_distributors'] %}
+    {% if inventory_perms | select('in', session.get('permissions', [])) | list | length > 0 %}
+    <div class="nav-group" data-collapsible="inventory">
+      <button type="button" class="nav-group-toggle" aria-expanded="true">
+        <span>Inventory</span>
+        <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      </button>
+      <div class="nav-group-links">
+        {% if has_permission('view_inventory_status') %}<a class="nav-link {{ 'active' if request.endpoint=='inventory_status_page' }}" href="{{ url_for('inventory_status_page') }}">Inventory Status</a>{% endif %}
+        {% if has_permission('manage_ordering_sheet') %}<a class="nav-link {{ 'active' if request.endpoint=='ordering_sheet_page' }}" href="{{ url_for('ordering_sheet_page') }}">Ordering Sheet</a>{% endif %}
+        {% if has_permission('manage_audit_history') %}<a class="nav-link {{ 'active' if request.endpoint in ['audit_history_list','audit_session_view'] }}" href="{{ url_for('audit_history_list') }}">Audit History</a>{% endif %}
+        {% if has_permission('manage_inventory_catalog') %}<a class="nav-link {{ 'active' if request.endpoint=='inventory_catalog' }}" href="{{ url_for('inventory_catalog') }}">Inventory Catalog</a>{% endif %}
+        {% if has_permission('manage_distributors') %}<a class="nav-link {{ 'active' if request.endpoint=='distributors_list' }}" href="{{ url_for('distributors_list') }}">Distributors</a>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% set consignment_perms = ['view_consignment','manage_consignment_items','manage_consignment_stock','manage_consignment_settlements'] %}
+    {% if consignment_perms | select('in', session.get('permissions', [])) | list | length > 0 %}
+    <div class="nav-group" data-collapsible="consignment">
+      <button type="button" class="nav-group-toggle" aria-expanded="true">
+        <span>Consignment</span>
+        <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      </button>
+      <div class="nav-group-links">
+        {% if has_permission('view_consignment') %}<a class="nav-link {{ 'active' if request.endpoint=='consignment_overview' }}" href="{{ url_for('consignment_overview') }}">Overview</a>{% endif %}
+        {% if has_permission('view_consignment') %}<a class="nav-link {{ 'active' if request.endpoint=='consignment_items' }}" href="{{ url_for('consignment_items') }}">Items</a>{% endif %}
+        {% if has_permission('view_consignment') %}<a class="nav-link {{ 'active' if request.endpoint=='consignment_receiving_page' }}" href="{{ url_for('consignment_receiving_page') }}">Receiving</a>{% endif %}
+        {% if has_permission('view_consignment') %}<a class="nav-link {{ 'active' if request.endpoint=='consignment_shrinkage_page' }}" href="{{ url_for('consignment_shrinkage_page') }}">Shrinkage</a>{% endif %}
+        {% if has_permission('view_consignment') %}<a class="nav-link {{ 'active' if request.endpoint=='consignment_returns_page' }}" href="{{ url_for('consignment_returns_page') }}">Returns</a>{% endif %}
+        {% if has_permission('view_consignment') %}<a class="nav-link {{ 'active' if request.endpoint=='consignment_sales_page' }}" href="{{ url_for('consignment_sales_page') }}">Sales by Distributor</a>{% endif %}
+        {% if has_permission('manage_consignment_settlements') %}<a class="nav-link {{ 'active' if request.endpoint in ['consignment_settlements_page'] }}" href="{{ url_for('consignment_overview') }}">Settlements</a>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% set sales_perms = ['process_pos_sales','view_sales_history','manage_price_list','manage_refunds','view_financial_reports','view_insights_retention'] %}
+    {% if sales_perms | select('in', session.get('permissions', [])) | list | length > 0 %}
+    <div class="nav-group" data-collapsible="sales">
+      <button type="button" class="nav-group-toggle" aria-expanded="true">
+        <span>Sales &amp; Billing</span>
+        <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      </button>
+      <div class="nav-group-links">
+        {% if has_permission('process_pos_sales') %}<a class="nav-link {{ 'active' if request.endpoint in ['pos_page','pos_receipt'] }}" href="{{ url_for('pos_page') }}">Point of Sale</a>{% endif %}
+        {% if has_permission('view_sales_history') %}<a class="nav-link {{ 'active' if request.endpoint=='pos_history' }}" href="{{ url_for('pos_history') }}">Sales History</a>{% endif %}
+        {% if has_permission('manage_price_list') %}<a class="nav-link {{ 'active' if request.endpoint=='price_list' }}" href="{{ url_for('price_list') }}">Price List</a>{% endif %}
+        {% if has_permission('manage_refunds') %}<a class="nav-link {{ 'active' if request.endpoint=='refunds_page' }}" href="{{ url_for('refunds_page') }}">Refunds</a>{% endif %}
+        {% if has_permission('view_financial_reports') %}
+        <a class="nav-link {{ 'active' if request.endpoint=='reports' }}" href="{{ url_for('reports') }}">Monthly P&amp;L</a>
+        <a class="nav-link {{ 'active' if request.endpoint=='reports_yearly' }}" href="{{ url_for('reports_yearly') }}">Yearly P&amp;L</a>
+        {% endif %}
+        {% if has_permission('view_insights_retention') %}
+        <a class="nav-link {{ 'active' if request.endpoint=='insights' }}" href="{{ url_for('insights') }}">Insights</a>
+        <a class="nav-link {{ 'active' if request.endpoint=='retention' }}" href="{{ url_for('retention') }}">Retention</a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% set admin_perms = ['manage_users_roles','view_logins_changes','manage_settings'] %}
+    {% if admin_perms | select('in', session.get('permissions', [])) | list | length > 0 %}
+    <div class="nav-group" data-collapsible="admin">
+      <button type="button" class="nav-group-toggle" aria-expanded="true">
+        <span>Admin</span>
+        <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      </button>
+      <div class="nav-group-links">
+        {% if has_permission('manage_users_roles') %}<a class="nav-link {{ 'active' if request.endpoint=='admin_users' }}" href="{{ url_for('admin_users') }}">Users &amp; Roles</a>{% endif %}
+        {% if has_permission('view_logins_changes') %}<a class="nav-link {{ 'active' if request.endpoint=='admin_logs' }}" href="{{ url_for('admin_logs') }}">Logins and Changes</a>{% endif %}
+        {% if has_permission('manage_settings') %}<a class="nav-link {{ 'active' if request.endpoint=='settings_page' }}" href="{{ url_for('settings_page') }}">Settings</a>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="nav-group" style="margin-top:auto;">
+      <a class="nav-link {{ 'active' if request.endpoint=='change_password' }}" href="{{ url_for('change_password') }}">{{ current_username }} · {{ current_role }}</a>
+      <a class="nav-link" href="{{ url_for('logout') }}">Log Out</a>
+    </div>
+  </nav>
+
+  <main class="main {% block main_class %}{% endblock %}">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<script>
+function toggleSidebar() {
+  var sidebar = document.querySelector('.sidebar');
+  var backdrop = document.querySelector('.sidebar-backdrop');
+  if (!sidebar || !backdrop) return;
+  sidebar.classList.toggle('open');
+  backdrop.classList.toggle('open');
+}
+function closeSidebar() {
+  var sidebar = document.querySelector('.sidebar');
+  var backdrop = document.querySelector('.sidebar-backdrop');
+  if (!sidebar || !backdrop) return;
+  sidebar.classList.remove('open');
+  backdrop.classList.remove('open');
+}
+document.querySelectorAll('.sidebar .nav-link').forEach(function(link) {
+  link.addEventListener('click', closeSidebar);
+});
+function toggleTheme() {
+  var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  if (isDark) {
+    document.documentElement.removeAttribute('data-theme');
+  } else {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+  try { localStorage.setItem('vetzoneiq-theme', isDark ? 'light' : 'dark'); } catch (e) {}
+}
+</script>
+<script src="{{ url_for('static', filename='ui.js') }}"></script>
+{% else %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="auth-flash-wrap">
+      {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+      {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+  {% block auth_content %}{% endblock %}
+{% endif %}
+<script>
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+</script>
+<script>
+(function() {
+  var token = document.querySelector('meta[name="csrf-token"]').content;
+  document.querySelectorAll('form').forEach(function(form) {
+    var method = (form.getAttribute('method') || 'get').toLowerCase();
+    if (method !== 'post') return;
+    if (form.querySelector('input[name="csrf_token"]')) return;
+    var input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'csrf_token';
+    input.value = token;
+    form.appendChild(input);
+  });
+})();
+</script>
+<script src="{{ url_for('static', filename='upload-progress.js') }}"></script>
+</body>
+</html>
