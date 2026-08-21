@@ -3,6 +3,18 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.1.0] - 2026-08-21
+
+### Changed
+- In-app updates (Settings → Updates) are now on by default. Running
+  `Start Vetzone.command` / `Start Vetzone.bat` (or `python3 setup.py`)
+  for the first time now automatically switches the install onto the
+  versioned-release layout the updater needs — what used to require a
+  separate manual `setup.py --enable-updates` step. The launcher scripts
+  hand off to the real one under `vetzone-data/` from then on. A plain
+  local checkout that wants to keep running in place (e.g. for
+  development) can pass `--no-enable-updates` to opt out.
+
 ## [1.0.1] - 2026-08-21
 
 ### Fixed

@@ -203,12 +203,35 @@ def main():
     apply_incremental_migrations()
     migrate_or_seed()
 
-    print(
-        "\nAll set. Start the app with:\n"
-        "  python3 app.py\n"
-        "\n(macOS: double-click 'Start Vetzone.command'."
-        "  Windows: double-click 'Start Vetzone.bat'.)\n"
+    # In-app updates (Settings -> Updates) are on by default for every new
+    # install — this switches onto the versioned-release layout
+    # automatically, the same as running setup.py --enable-updates by hand
+    # used to require. Skipped when already running from inside a managed
+    # release, or when --no-enable-updates is passed (e.g. a plain local
+    # dev checkout that deliberately wants to keep running in place).
+    # "Already inside a managed release" is checked two ways: VETZONE_DATA_DIR
+    # is set when launched through the real launcher, but someone can also
+    # cd into a release folder and run setup.py by hand with no env vars
+    # set at all — the structural check (this folder is literally named
+    # app_v* directly under a vetzone-releases/ folder) catches that case
+    # too, since re-running enable_updates() from in there would resolve
+    # data_dir/releases_dir relative to the WRONG parent and nest a second,
+    # broken layout inside the first.
+    in_release_folder = (
+        os.path.basename(BASE_DIR).startswith("app_v")
+        and os.path.basename(os.path.dirname(BASE_DIR)) == "vetzone-releases"
     )
+    already_managed = bool(os.environ.get("VETZONE_DATA_DIR")) or in_release_folder
+    if already_managed or "--no-enable-updates" in sys.argv:
+        print(
+            "\nAll set. Start the app with:\n"
+            "  python3 app.py\n"
+            "\n(macOS: double-click 'Start Vetzone.command'."
+            "  Windows: double-click 'Start Vetzone.bat'.)\n"
+        )
+        return
+
+    enable_updates()
 
 
 # ---------------------------------------------------------------------------

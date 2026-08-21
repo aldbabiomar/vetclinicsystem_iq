@@ -1,17 +1,26 @@
 #!/bin/bash
 # Vetzone IQ — double-click launcher (macOS)
 # First run: creates a virtual environment, installs dependencies, sets up
-# PostgreSQL in Docker, and loads your data. Every run after that: just
-# starts the app and opens it in your browser.
+# PostgreSQL in Docker, loads your data, and switches this install onto
+# the versioned-release layout the in-app updater needs (Settings ->
+# Updates) — automatically, no separate step required. From then on, the
+# app actually runs out of vetzone-data/ (a sibling of this folder, not
+# inside it) — every run after the first just hands off to the launcher
+# that lives there.
 
 cd "$(dirname "$0")" || exit 1
 
-echo "Vetzone IQ — starting up..."
+DATA_DIR="$(cd .. 2>/dev/null && pwd)/vetzone-data"
+if [ -f "$DATA_DIR/active_release.txt" ]; then
+  exec "$DATA_DIR/Start Vetzone.command"
+fi
+
+echo "Vetzone IQ — first-time setup..."
 echo ""
 
 # 1. Create the virtual environment if it doesn't exist yet
 if [ ! -d "venv" ]; then
-  echo "First-time setup: creating a Python environment for the app..."
+  echo "Creating a Python environment for setup..."
   python3 -m venv venv
   if [ $? -ne 0 ]; then
     echo ""
@@ -26,14 +35,14 @@ fi
 source venv/bin/activate
 
 # 3. Install dependencies if they're not already there
-python3 -c "import flask, reportlab, PIL, psycopg, waitress, apscheduler, dotenv" 2>/dev/null
+python3 -c "import flask, reportlab, PIL, psycopg, waitress, apscheduler, dotenv, requests" 2>/dev/null
 if [ $? -ne 0 ]; then
-  echo "First-time setup: installing dependencies..."
+  echo "Installing dependencies..."
   python3 -m pip install --quiet -r requirements.txt
 fi
 
-# 4. Set up PostgreSQL (Docker), schema, and data — every run; each step
-#    skips itself automatically once it's already done.
+# 4. Set up PostgreSQL (Docker), schema, and data, then switch onto the
+#    versioned-release layout — all one step, safe to re-run.
 python3 setup.py
 if [ $? -ne 0 ]; then
   echo ""
@@ -41,13 +50,15 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# 5. Open the browser shortly after the server starts, then start the server
-( sleep 1.5 && open "http://127.0.0.1:5050" ) &
+if [ ! -f "$DATA_DIR/active_release.txt" ]; then
+  echo ""
+  echo "Setup finished, but the versioned-release layout wasn't created —"
+  echo "check the output above for what went wrong."
+  read -p "Press Return to close this window..."
+  exit 1
+fi
 
 echo ""
-echo "Vetzone IQ is running at http://127.0.0.1:5050"
-echo "Leave this window open while you use the app."
-echo "Close this window (or press Control-C) to stop it."
+echo "First-time setup complete — handing off to the real launcher."
 echo ""
-
-python3 app.py
+exec "$DATA_DIR/Start Vetzone.command"
