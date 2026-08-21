@@ -12,6 +12,8 @@ import re
 import uuid
 from datetime import datetime
 
+import auth
+
 UPLOAD_ROOT = os.path.join(os.path.dirname(__file__), "uploads")
 ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg"}
 
@@ -79,12 +81,14 @@ def save_attachment(db, patient_id, record_type, record_id, file_storage, upload
     visit_id = record_id if record_type == "visit" else None
     case_id = record_id if record_type == "inpatient" else None
 
-    db.execute(
+    cur = db.execute(
         "INSERT INTO attachments (patient_id, visit_id, inpatient_case_id, relative_path, original_name, uploaded_at, uploaded_by) "
-        "VALUES (?,?,?,?,?,?,?)",
+        "VALUES (?,?,?,?,?,?,?) RETURNING id",
         (patient_id, visit_id, case_id, relative_path, file_storage.filename,
          datetime.now().isoformat(timespec="seconds"), uploaded_by),
     )
+    attachment_id = cur.fetchone()["id"]
+    auth.log_change(db, "attachments", str(attachment_id), "create")
 
     try:
         os.makedirs(folder, exist_ok=True)

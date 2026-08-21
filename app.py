@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import math
 import socket
 import logging
@@ -802,6 +803,7 @@ def change_password():
         else:
             db.execute("UPDATE users SET password_hash=?, must_change_password=false WHERE id=?",
                        (auth.hash_password(new), user["id"]))
+            auth.log_change(db, "users", user["id"], "update", {"password": ("(hidden)", "(self-service change)")})
             db.commit()
             flash("Password updated.", "success")
             return redirect(url_for("dashboard"))
@@ -1934,10 +1936,12 @@ def visit_payment_add(visit_id):
     except BadDate as e:
         flash(str(e), "error")
         return redirect(url_for("visit_detail", visit_id=visit_id))
-    db.execute("INSERT INTO payments (visit_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?)",
-              (visit_id, amount, f.get("method"), payment_date,
-               session["user_id"], f.get("notes")))
-    auth.log_change(db, "payments", visit_id, "create")
+    cur = db.execute(
+        "INSERT INTO payments (visit_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?) RETURNING id",
+        (visit_id, amount, f.get("method"), payment_date, session["user_id"], f.get("notes")),
+    )
+    payment_id = cur.fetchone()["id"]
+    auth.log_change(db, "payments", str(payment_id), "create")
     db.commit()
     flash("Payment recorded.", "success")
     return redirect(url_for("visit_detail", visit_id=visit_id))
@@ -2310,9 +2314,12 @@ def inventory_catalog():
     rows = db.execute(q, params + [PER_PAGE, page_offset(page)]).fetchall()
     distributors = db.execute("SELECT * FROM distributors ORDER BY name").fetchall()
     _, flagged_inventory = logic.retail_consistency_flags(db)
+    has_generated_barcodes = db.execute(
+        "SELECT EXISTS(SELECT 1 FROM inventory_list WHERE barcode_source='generated' AND active=true) AS e"
+    ).fetchone()["e"]
     return render_template("inventory_catalog.html", items=rows, distributors=distributors,
                             show_inactive=show_inactive, categories=INVENTORY_CATEGORIES, search=search,
-                            flagged_inventory=flagged_inventory,
+                            flagged_inventory=flagged_inventory, has_generated_barcodes=has_generated_barcodes,
                             page=page, total_pages=page_count(total), total_count=total)
 
 
@@ -2568,6 +2575,54 @@ def inventory_barcode_label(item_id):
         flash("This item doesn't have a barcode yet.", "error")
         return redirect(url_for("inventory_catalog"))
     return render_template("barcode_label.html", item=item)
+
+
+@app.route("/inventory-catalog/barcodes/generated")
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog_barcodes_generated():
+    """Every active item with a Vetzone-created barcode (not a real
+    manufacturer code), across the whole catalog regardless of which page
+    of Inventory Catalog is showing — feeds the Bulk Barcode Print
+    picker."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, name, barcode FROM inventory_list "
+        "WHERE barcode_source='generated' AND active=true ORDER BY name"
+    ).fetchall()
+    return jsonify([{"id": r["id"], "name": r["name"], "barcode": r["barcode"]} for r in rows])
+
+
+@app.route("/inventory-catalog/barcodes/bulk-print", methods=["POST"])
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog_barcodes_bulk_print():
+    db = get_db()
+    try:
+        requested = json.loads(request.form.get("items") or "[]")
+    except (ValueError, TypeError):
+        requested = []
+    labels = []
+    for entry in requested if isinstance(requested, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        item_id = str(entry.get("id", ""))
+        try:
+            qty = int(entry.get("qty", 1))
+        except (TypeError, ValueError):
+            qty = 1
+        qty = max(1, min(qty, 500))
+        # Re-checked server-side, same as everywhere else a client-supplied
+        # id gets acted on — only a currently-generated-barcode item can
+        # end up on the printed sheet, no matter what the client sent.
+        item = db.execute(
+            "SELECT id, name, barcode FROM inventory_list WHERE id=? AND barcode_source='generated'",
+            (item_id,),
+        ).fetchone()
+        if item and item["barcode"]:
+            labels.append({"id": item["id"], "name": item["name"], "barcode": item["barcode"], "qty": qty})
+    if not labels:
+        flash("No barcodes selected to print.", "error")
+        return redirect(url_for("inventory_catalog"))
+    return render_template("barcode_bulk_print.html", labels=labels)
 
 
 # ---------------------------------------------------------------------------
@@ -2837,14 +2892,18 @@ def consignment_overview():
 @auth.permission_required("view_consignment")
 def consignment_items():
     db = get_db()
+    page = get_page()
+    total = db.execute("SELECT COUNT(*) c FROM inventory_list WHERE category='Retail' AND active=true").fetchone()["c"]
     rows = db.execute(
         "SELECT i.*, d.name AS distributor_name FROM inventory_list i "
         "LEFT JOIN distributors d ON d.id = i.distributor_id "
-        "WHERE i.category='Retail' AND i.active=true ORDER BY i.ownership_type DESC, i.name"
+        "WHERE i.category='Retail' AND i.active=true ORDER BY i.ownership_type DESC, i.name LIMIT ? OFFSET ?",
+        (PER_PAGE, page_offset(page)),
     ).fetchall()
     distributors = db.execute("SELECT * FROM distributors ORDER BY name").fetchall()
     locked = {r["id"]: logic.consignment_item_locked(db, r["id"]) for r in rows if r["ownership_type"] == "Consignment"}
-    return render_template("consignment_items.html", items=rows, distributors=distributors, locked=locked)
+    return render_template("consignment_items.html", items=rows, distributors=distributors, locked=locked,
+                            page=page, total_pages=page_count(total), total_count=total)
 
 
 @app.route("/consignment/items/bulk-edit", methods=["POST"])
@@ -3097,13 +3156,17 @@ def consignment_sales_page():
     distributor_id = request.args.get("distributor_id") or None
     date_from = request.args.get("date_from") or None
     date_to = request.args.get("date_to") or None
-    rows = logic.consignment_sales_by_distributor(db, distributor_id, date_from, date_to)
+    all_rows = logic.consignment_sales_by_distributor(db, distributor_id, date_from, date_to)
+    page = get_page()
+    total = len(all_rows)
+    rows = all_rows[page_offset(page):page_offset(page) + PER_PAGE]
     distributors = db.execute(
         "SELECT DISTINCT d.id, d.name FROM distributors d JOIN inventory_list i ON i.distributor_id=d.id "
         "WHERE i.ownership_type='Consignment' ORDER BY d.name"
     ).fetchall()
     return render_template("consignment_sales.html", rows=rows, distributors=distributors,
-                            distributor_id=distributor_id, date_from=date_from or "", date_to=date_to or "")
+                            distributor_id=distributor_id, date_from=date_from or "", date_to=date_to or "",
+                            page=page, total_pages=page_count(total), total_count=total)
 
 
 @app.route("/consignment/settlements/<distributor_id>")
@@ -3530,12 +3593,14 @@ def boarding_incident(boarding_id):
         flash("Describe what's wrong before submitting.", "error")
         return redirect(url_for("boarding_page"))
     contacted = "Y" if f.get("contacted") == "on" else "N"
-    db.execute(
+    cur = db.execute(
         "INSERT INTO boarding_incidents (boarding_id, timestamp, issue, contacted, contact_method, response, user_id) "
-        "VALUES (?,?,?,?,?,?,?)",
+        "VALUES (?,?,?,?,?,?,?) RETURNING id",
         (boarding_id, datetime.now().isoformat(timespec="seconds"), issue, contacted,
          f.get("contact_method") if contacted == "Y" else None, f.get("response"), session.get("user_id")),
     )
+    incident_id = cur.fetchone()["id"]
+    auth.log_change(db, "boarding_incidents", str(incident_id), "create")
     db.commit()
     flash("Incident logged.", "success")
     return redirect(url_for("boarding_page"))
@@ -3553,12 +3618,13 @@ def boarding_payment(boarding_id):
     if amount <= 0:
         flash("Payment amount must be greater than 0.", "error")
         return redirect(url_for("boarding_page"))
-    db.execute(
-        "INSERT INTO payments (boarding_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?)",
+    cur = db.execute(
+        "INSERT INTO payments (boarding_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?) RETURNING id",
         (boarding_id, amount, request.form.get("method"), date.today().isoformat(),
          session.get("user_id"), request.form.get("notes")),
     )
-    auth.log_change(db, "payments", str(boarding_id), "create")
+    payment_id = cur.fetchone()["id"]
+    auth.log_change(db, "payments", str(payment_id), "create")
     db.commit()
     flash("Payment recorded.", "success")
     return redirect(url_for("boarding_page"))
@@ -3747,7 +3813,28 @@ def pos_history():
         f"SELECT s.*, u.full_name as cashier_name FROM sales s LEFT JOIN users u ON u.id=s.cashier_id{where} "
         "ORDER BY s.sale_date DESC LIMIT ? OFFSET ?", params + [PER_PAGE, page_offset(page)]
     ).fetchall()
-    return render_template("pos_history.html", sales=sales, date_filter=date_filter,
+    day_totals = None
+    if date_filter:
+        # Scoped to every sale that day, not just the current page — this
+        # is meant for end-of-day cash/card/transfer reconciliation against
+        # the register, so it has to reflect the whole day regardless of
+        # pagination.
+        totals_rows = db.execute(
+            "SELECT payment_method, COALESCE(SUM(total), 0) AS total FROM sales "
+            "WHERE sale_date LIKE ? GROUP BY payment_method",
+            (date_filter + "%",),
+        ).fetchall()
+        day_totals = {"Cash": 0, "Card": 0, "Transfer": 0, "other": 0, "all": 0}
+        for r in totals_rows:
+            if r["payment_method"] in ("Cash", "Card", "Transfer"):
+                day_totals[r["payment_method"]] = r["total"]
+            else:
+                # Anything outside the three known methods (blank/legacy/
+                # unexpected value) still counts toward the day's grand
+                # total — never silently dropped from a reconciliation figure.
+                day_totals["other"] += r["total"]
+            day_totals["all"] += r["total"]
+    return render_template("pos_history.html", sales=sales, date_filter=date_filter, day_totals=day_totals,
                             page=page, total_pages=page_count(total), total_count=total)
 
 
@@ -3793,11 +3880,17 @@ def inpatient_new():
             return redirect(url_for("inpatient_new"))
         case_id = _create_inpatient_case(db, f["patient_id"], None, f.get("complaint"), new_admission_date,
                                           new_weight_kg, new_bcs)
+        admit_fields = {
+            "exam_findings": f.get("exam_findings"), "admitted_items": f.get("admitted_items"),
+            "attending_vet_id": f.get("attending_vet_id") or None, "supervising_vet_id": f.get("supervising_vet_id") or None,
+        }
         db.execute(
             "UPDATE inpatient_cases SET exam_findings=?, admitted_items=?, attending_vet_id=?, supervising_vet_id=? WHERE id=?",
-            (f.get("exam_findings"), f.get("admitted_items"), f.get("attending_vet_id") or None,
-             f.get("supervising_vet_id") or None, case_id),
+            (admit_fields["exam_findings"], admit_fields["admitted_items"], admit_fields["attending_vet_id"],
+             admit_fields["supervising_vet_id"], case_id),
         )
+        auth.log_change(db, "inpatient_cases", str(case_id), "update",
+                         {k: (None, v) for k, v in admit_fields.items() if v})
         db.commit()
         flash("Patient admitted.", "success")
         return redirect(url_for("inpatient_detail", case_id=case_id))
@@ -4029,10 +4122,12 @@ def inpatient_payment_add(case_id):
     except BadDate as e:
         flash(str(e), "error")
         return redirect(url_for("inpatient_detail", case_id=case_id))
-    db.execute("INSERT INTO payments (inpatient_case_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?)",
-              (case_id, amount, f.get("method"), payment_date,
-               session["user_id"], f.get("notes")))
-    auth.log_change(db, "payments", str(case_id), "create")
+    cur = db.execute(
+        "INSERT INTO payments (inpatient_case_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?) RETURNING id",
+        (case_id, amount, f.get("method"), payment_date, session["user_id"], f.get("notes")),
+    )
+    payment_id = cur.fetchone()["id"]
+    auth.log_change(db, "payments", str(payment_id), "create")
     db.commit()
     flash("Payment recorded.", "success")
     return redirect(url_for("inpatient_detail", case_id=case_id))
@@ -4118,12 +4213,14 @@ def appointment_new():
     # that race and turns it into the same friendly message instead of a
     # raw 500.
     try:
-        db.execute(
+        cur = db.execute(
             "INSERT INTO appointments (appt_date, slot_label, resource_type, resource_id, pet_name, owner_name, "
-            "appointment_type, reason, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "appointment_type, reason, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id",
             (appt_date, slot_label, resource_type, resource_id, f["pet_name"], f["owner_name"],
              appointment_type, f.get("reason"), session["user_id"], datetime.now().isoformat(timespec="seconds")),
         )
+        appt_id = cur.fetchone()["id"]
+        auth.log_change(db, "appointments", str(appt_id), "create")
         db.commit()
     except dbmod.IntegrityError:
         db.rollback()
@@ -4138,10 +4235,14 @@ def appointment_new():
 def appointment_cancel(appt_id):
     db = get_db()
     row = db.execute("SELECT appt_date FROM appointments WHERE id=?", (appt_id,)).fetchone()
+    if not row:
+        flash("Appointment not found.", "error")
+        return redirect(url_for("appointments_page"))
     db.execute("DELETE FROM appointments WHERE id=?", (appt_id,))
+    auth.log_change(db, "appointments", str(appt_id), "delete")
     db.commit()
     flash("Appointment cancelled.", "success")
-    return redirect(url_for("appointments_page", day=str(row["appt_date"]) if row else date.today().isoformat()))
+    return redirect(url_for("appointments_page", day=str(row["appt_date"])))
 
 
 # ---------------------------------------------------------------------------
@@ -4399,10 +4500,11 @@ def refund_retail_save():
         return redirect(url_for("refunds_page"))
 
     now = datetime.now().isoformat(timespec="seconds")
+    rounded_total = money.round_to_denomination(total)
     cur = db.execute(
         "INSERT INTO refunds (refund_type, refund_date, amount, restocked, sale_id, reason, processed_by, created_at) "
         "VALUES ('retail',?,?,?,?,?,?,?) RETURNING id",
-        (refund_date, money.round_to_denomination(total), restock, sale_id, reason, session["user_id"], now),
+        (refund_date, rounded_total, restock, sale_id, reason, session["user_id"], now),
     )
     refund_id = cur.fetchone()["id"]
 
@@ -4422,7 +4524,7 @@ def refund_retail_save():
     logic.recompute_month_summary(db, logic.month_key(refund_date))
     auth.log_change(db, "refunds", str(refund_id), "create")
     db.commit()
-    flash(f"Refund of {total:,.0f} IQD recorded" + (" and stock restored." if restock else "."), "success")
+    flash(f"Refund of {rounded_total:,.0f} IQD recorded" + (" and stock restored." if restock else "."), "success")
     return redirect(url_for("refunds_page"))
 
 
@@ -4463,16 +4565,17 @@ def refund_service_save():
         case_id = int(case_id_raw)
 
     now = datetime.now().isoformat(timespec="seconds")
+    rounded_amount = money.round_to_denomination(amount)
     cur = db.execute(
         "INSERT INTO refunds (refund_type, refund_date, amount, visit_id, inpatient_case_id, reason, processed_by, created_at) "
         "VALUES ('service',?,?,?,?,?,?,?) RETURNING id",
-        (refund_date, money.round_to_denomination(amount), visit_id, case_id, reason, session["user_id"], now),
+        (refund_date, rounded_amount, visit_id, case_id, reason, session["user_id"], now),
     )
     refund_id = cur.fetchone()["id"]
     logic.recompute_month_summary(db, logic.month_key(refund_date))
     auth.log_change(db, "refunds", str(refund_id), "create")
     db.commit()
-    flash(f"Service refund of {amount:,.0f} IQD recorded.", "success")
+    flash(f"Service refund of {rounded_amount:,.0f} IQD recorded.", "success")
     return redirect(url_for("refunds_page"))
 
 

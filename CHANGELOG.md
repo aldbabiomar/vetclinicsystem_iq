@@ -3,6 +3,41 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.3.0] - 2026-08-21
+
+### Added
+- Bulk Barcode Print (Inventory Catalog): prints every Vetzone-created
+  barcode at once instead of one at a time. Only shows up when at least
+  one item has a created (not scanned/manual) barcode; lets you set how
+  many copies each item needs and drop any you don't want before
+  printing a single sheet.
+- Sales History now shows a Cash / Card / Bank Transfer / All-Methods
+  end-of-day tally whenever a date filter is applied — meant for closing
+  out the register and reconciling against what's actually on hand.
+- Pagination (50/page, matching the rest of the app) added to
+  Consignment Items and Consignment Sales by Distributor — audited every
+  other page in the app for the same need; everything else already
+  paginates or is naturally small (catalog/staff/distributor-count-sized,
+  not transaction-log-sized).
+
+### Fixed
+- The barcode label box had a fixed pixel width narrower than what
+  JsBarcode actually renders, so the barcode overflowed past its own
+  dashed border. The box now sizes to its content instead.
+- Two refund routes recorded the 250-IQD-rounded amount in the database
+  but showed the customer/staff the un-rounded figure in the success
+  message — up to 125 IQD apart from what was actually saved.
+- Three payment-recording routes (visit, boarding, inpatient) logged the
+  audit entry against the parent record's id instead of the payment's
+  own id, making individual payments indistinguishable from each other
+  in Admin > Logins and Changes.
+- Closed 7 gaps found in an audit-logging sweep of every state-changing
+  route in the app: attachment uploads (visit + inpatient), a second
+  unlogged field-update during inpatient admission, self-service
+  password changes, starting an inventory audit session, boarding
+  incident reports, and appointment booking/cancellation. All now write
+  to the audit trail like every other action in the app.
+
 ## [1.2.1] - 2026-08-21
 
 ### Fixed
