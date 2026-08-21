@@ -232,7 +232,10 @@ function rollbackUpdate() {
 <div class="section-title">Restore From Backup</div>
 <p class="small muted" style="margin-top:-6px;">
   Replaces <strong>all</strong> current data in Vetzone IQ with the contents of a backup file. This can't be undone —
-  take a fresh backup first if you're not sure.
+  take a fresh backup first if you're not sure. Uploaded files (X-rays, lab results) aren't part of the backup
+  itself and are unaffected by a restore, but any that were attached <em>after</em> the backup being restored was
+  taken will need reconnecting — run <code>python3 reconcile_attachments.py</code> from the app folder afterward
+  to find and relink them safely.
 </p>
 <div class="form-grid">
   <div class="field full"><label>Backup File To Restore</label>
