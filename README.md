@@ -29,7 +29,7 @@ in your browser.
 
 **Manual setup**, if you'd rather run it yourself:
 ```bash
-cd vetzone
+cd vetclinicsystem_iq
 python3 -m venv venv
 source venv/bin/activate      # Windows: venv\Scripts\activate
 pip install -r requirements.txt
