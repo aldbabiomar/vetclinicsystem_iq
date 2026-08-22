@@ -3,6 +3,32 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.4.5] - 2026-08-22
+
+### Fixed
+- **Refunding a discounted POS sale refunded the pre-discount price, not what the
+  customer actually paid.** Checkout only ever applied the sale's discount to the
+  overall total, never to each item's stored unit price — so refunding any item from a
+  discounted sale handed back more money than the sale collected, every time, silently.
+- A discount applied to a visit's bill wasn't re-checked against items added to that
+  bill afterward — so an item explicitly marked "not discountable" could still end up
+  discounted, just by adding it after the discount instead of before.
+- Saving a visit's billing or discount for the first time had a narrow race: two
+  near-simultaneous saves (double-click, a retried request) could both try to create
+  the bill row and one would crash instead of saving.
+- Three internal lookup endpoints (patient search, inventory lookup, price list
+  lookup) had no permission check of their own — reachable by any logged-in user
+  regardless of their role's actual permissions, even a role deliberately restricted
+  from seeing owner contact info or pricing.
+- Backup, restore, and in-app update/rollback could all run concurrently with each
+  other — a manual restore triggered at the same moment as the nightly scheduled
+  backup (or another admin action) had no guard stopping two database-level
+  operations from touching the same tables at once. Now mutually exclusive.
+- A handful of routes (follow-up/wellness/grooming status updates, an inpatient
+  attachment upload, an admin password reset) crashed instead of showing a clean
+  error when given a nonexistent record ID.
+- The Operating Costs form on Reports didn't validate the month value server-side.
+
 ## [1.4.4] - 2026-08-22
 
 ### Fixed

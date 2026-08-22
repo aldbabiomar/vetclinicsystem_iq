@@ -14,12 +14,30 @@ To restore a backup later:
 import os
 import shutil
 import subprocess
+import threading
 from datetime import datetime
 
 import logic
 
 FILENAME_PREFIX = "vetzone_backup_"
 FILENAME_SUFFIX = ".dump"
+
+# Guards every operation that runs pg_dump or pg_restore against the live
+# database — manual Backup Now, manual Restore, the nightly scheduled
+# backup, the final backup taken on shutdown, and (via updater.py, which
+# shares this same lock) the backup step of an in-app update and the
+# switch-to-new-version step of both update and rollback. pg_restore
+# --clean drops and recreates every table; a second dump or restore
+# running against those same tables at the same moment risks a failed or
+# silently partial restore (see run_restore()'s own error message, which
+# already acknowledges that failure mode) rather than a clean queued wait,
+# so this is a non-blocking try-lock: a second job arriving while one is
+# already running is rejected immediately with a clear message, never
+# left to silently interleave with it. An RLock, not a plain Lock — an
+# update's apply_update() (updater.py) holds this lock for its whole run
+# and, on the very same thread, also calls into run_backup() as its own
+# first step; a plain Lock would deadlock re-acquiring itself there.
+maintenance_lock = threading.RLock()
 
 
 def _pg_conn_parts():
@@ -124,6 +142,21 @@ def resolve_restorable_backup(db, source_file):
 
 
 def run_backup(db, dest_dir=None, retention=None, triggered_by=None, on_progress=None):
+    """Acquires maintenance_lock (see its own comment) before running the
+    actual backup in _run_backup_locked(). Returns (ok: bool, message: str)
+    immediately, without touching anything, if another backup/restore/
+    update is already in progress."""
+    if not maintenance_lock.acquire(blocking=False):
+        msg = "Another backup, restore, or update is already running — try again once it finishes."
+        _log(db, "failed", None, None, msg, triggered_by=triggered_by)
+        return False, msg
+    try:
+        return _run_backup_locked(db, dest_dir, retention, triggered_by, on_progress)
+    finally:
+        maintenance_lock.release()
+
+
+def _run_backup_locked(db, dest_dir=None, retention=None, triggered_by=None, on_progress=None):
     """
     Performs one backup, applies retention, and logs the outcome to
     backup_log. Returns (ok: bool, message: str).
@@ -280,6 +313,19 @@ def _run_pg_restore(dump_path, on_count=None):
 
 
 def run_restore(get_fresh_db, dump_path, triggered_by=None, on_progress=None):
+    """Acquires maintenance_lock (see its own comment) before running the
+    actual restore in _run_restore_locked(). Returns (ok: bool, message:
+    str) immediately, without touching anything, if another backup/
+    restore/update is already in progress."""
+    if not maintenance_lock.acquire(blocking=False):
+        return False, "Another backup, restore, or update is already running — try again once it finishes."
+    try:
+        return _run_restore_locked(get_fresh_db, dump_path, triggered_by, on_progress)
+    finally:
+        maintenance_lock.release()
+
+
+def _run_restore_locked(get_fresh_db, dump_path, triggered_by=None, on_progress=None):
     """
     Restores the database from a backup .dump file, replacing ALL current
     data with whatever that backup contained.

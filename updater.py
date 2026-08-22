@@ -312,7 +312,23 @@ def apply_update(tag_name, tarball_url, on_progress=None):
     at any point up to and including validation leaves the clinic exactly
     as it was, still on the old version, with a fresh backup taken for
     good measure.
+
+    Holds backup.maintenance_lock for the whole flow — not just its own
+    "Backing up database" step — so a manual backup/restore can't start
+    partway through an update (e.g. between the schema sync and the
+    process restart) any more than an update can start partway through
+    one of those.
     """
+    import backup as backup_mod
+    if not backup_mod.maintenance_lock.acquire(blocking=False):
+        return False, "A backup, restore, or another update is already running — try again once it finishes."
+    try:
+        return _apply_update_locked(tag_name, tarball_url, on_progress)
+    finally:
+        backup_mod.maintenance_lock.release()
+
+
+def _apply_update_locked(tag_name, tarball_url, on_progress=None):
     def step(i, label=None):
         if on_progress:
             on_progress(i, label)
@@ -383,7 +399,22 @@ def rollback_to_previous():
     check-for-updates flow, for when a new version turns out to have a
     problem the health check didn't catch (a business-logic bug, not a
     crash). Does NOT restore the database backup — data written under the
-    newer version stays exactly where it is, in Postgres, untouched."""
+    newer version stays exactly where it is, in Postgres, untouched.
+
+    Holds backup.maintenance_lock for the same reason apply_update() does
+    — a restart mid-backup/restore would leave that job's subprocess
+    orphaned against a process that's no longer there to record its
+    result."""
+    import backup as backup_mod
+    if not backup_mod.maintenance_lock.acquire(blocking=False):
+        return False, "A backup, restore, or update is already running — try again once it finishes."
+    try:
+        return _rollback_to_previous_locked()
+    finally:
+        backup_mod.maintenance_lock.release()
+
+
+def _rollback_to_previous_locked():
     if not is_configured():
         return False, "Updates aren't set up on this install yet."
     current = active_release_name()
