@@ -5,8 +5,8 @@
   <div class="auth-card">
     <div class="brand" style="border:none; padding:0 0 18px; margin-bottom:6px; justify-content:center;">
       <span class="mark">
-        <img class="brand-logo-light" src="{{ url_for('static', filename='logo-login-light.png') }}" alt="">
-        <img class="brand-logo-dark" src="{{ url_for('static', filename='logo-login-dark.png') }}" alt="">
+        <img class="brand-logo-light" src="{{ url_for('static', filename=static_asset('logo-login-light.png', theme_palette)) }}" alt="">
+        <img class="brand-logo-dark" src="{{ url_for('static', filename=static_asset('logo-login-dark.png', theme_palette)) }}" alt="">
       </span>
       <span class="brand-name" style="color:var(--ink);">{{ clinic_name }}</span>
     </div>

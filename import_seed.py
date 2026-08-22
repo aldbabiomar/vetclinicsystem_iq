@@ -1,5 +1,5 @@
 """
-Database builder for Vetzone IQ (v3 schema).
+Database builder for VetClinicSystem IQ (v3 schema).
 Run once with:  python3 import_seed.py
 Builds the Postgres schema and loads the real clinic data from seed_data.json.
 Refuses to run if the database already has data in it, so it can't
@@ -253,7 +253,7 @@ def main():
 
     # ---------------- Default settings ----------------
     defaults = {
-        "clinic_name": "Vetzone IQ",
+        "clinic_name": "VetClinicSystem IQ",
         "clinic_location": "Baghdad, Iraq",
         "currency": "IQD",
         "audit_overdue_days": "35",

@@ -116,7 +116,7 @@ function toggleDistEdit(id) {
     <h2 style="margin-top:0;" id="barcodeModalTitle">Manage Barcode</h2>
     <p class="small muted" style="margin-top:-6px;">
       Every item has at most one barcode — either a real one scanned or typed in from its own
-      packaging, or one Vetzone IQ creates for you to print. Never both at once: setting one up
+      packaging, or one VetClinicSystem IQ creates for you to print. Never both at once: setting one up
       below turns off the other option until you remove it.
     </p>
     <div id="barcodeModalError" class="small" style="color:var(--danger); display:none; margin-bottom:10px;"></div>
@@ -135,7 +135,7 @@ function toggleDistEdit(id) {
 
     <div id="barcodeGeneratedSection" style="padding:12px; border:1px solid var(--line-soft); border-radius:8px;">
       <div style="font-weight:650; margin-bottom:4px;" id="barcodeGeneratedTitle">Create Barcode</div>
-      <p class="small muted" style="margin:0 0 8px;" id="barcodeGeneratedHint">No barcode on the packaging? Vetzone IQ can create one and print a label to stick on the item.</p>
+      <p class="small muted" style="margin:0 0 8px;" id="barcodeGeneratedHint">No barcode on the packaging? VetClinicSystem IQ can create one and print a label to stick on the item.</p>
       <div style="display:flex; gap:8px;">
         <button class="btn small secondary" type="button" id="barcodeCreateBtn" onclick="barcodeManagerGenerate()">Create Now</button>
         <a class="btn small secondary" id="barcodePrintBtn" href="#" style="display:none;">Print</a>
@@ -153,7 +153,7 @@ function toggleDistEdit(id) {
   <div class="modal-box" style="max-width:560px;">
     <h2 style="margin-top:0;">Bulk Barcode Print</h2>
     <p class="small muted" style="margin-top:-6px;">
-      Every item with a Vetzone-created barcode. Set how many labels each one needs, remove any
+      Every item with a VetClinicSystem-created barcode. Set how many labels each one needs, remove any
       you don't want on this run, then print them all together.
     </p>
     <div id="bulkBarcodeError" class="small" style="color:var(--danger); display:none; margin-bottom:10px;"></div>
@@ -236,7 +236,7 @@ function barcodeManagerRender(data) {
   // ---- Create/Created Barcode section ----
   if (isGenerated) {
     generatedTitle.textContent = 'Created Barcode';
-    generatedHint.textContent = 'This item\u2019s barcode was created by Vetzone IQ. Print a label to stick on the item, or remove it to start over.';
+    generatedHint.textContent = 'This item\u2019s barcode was created by VetClinicSystem IQ. Print a label to stick on the item, or remove it to start over.';
     createBtn.style.display = 'none';
     printBtn.style.display = 'inline-flex';
     printBtn.href = data.label_url;
@@ -244,7 +244,7 @@ function barcodeManagerRender(data) {
     generatedSection.style.opacity = '1';
   } else {
     generatedTitle.textContent = 'Create Barcode';
-    generatedHint.textContent = 'No barcode on the packaging? Vetzone IQ can create one and print a label to stick on the item.';
+    generatedHint.textContent = 'No barcode on the packaging? VetClinicSystem IQ can create one and print a label to stick on the item.';
     createBtn.style.display = 'inline-flex';
     createBtn.disabled = isManual;
     printBtn.style.display = 'none';

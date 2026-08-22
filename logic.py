@@ -1,5 +1,5 @@
 """
-Vetzone IQ — computation engine (v3).
+VetClinicSystem IQ — computation engine (v3).
 Pure computation over the database; no Flask imports.
 """
 import calendar

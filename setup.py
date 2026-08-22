@@ -1,5 +1,5 @@
 """
-Vetzone IQ — one-command setup.
+VetClinicSystem IQ — one-command setup.
 Works the same way on macOS and Windows.
 
     python3 setup.py
@@ -86,7 +86,7 @@ def start_postgres():
     print("  Waiting for the database to be ready...")
     for _ in range(60):
         r = run(
-            compose + ["exec", "-T", "db", "pg_isready", "-U", "vetzone", "-d", "vetzone"],
+            compose + ["exec", "-T", "db", "pg_isready", "-U", "vetclinicsystemiq", "-d", "vetclinicsystemiq"],
             capture_output=True, text=True,
         )
         if r.returncode == 0:
@@ -239,25 +239,25 @@ def main():
     # used to require. Skipped when already running from inside a managed
     # release, or when --no-enable-updates is passed (e.g. a plain local
     # dev checkout that deliberately wants to keep running in place).
-    # "Already inside a managed release" is checked two ways: VETZONE_DATA_DIR
+    # "Already inside a managed release" is checked two ways: VETCLINICSYSTEMIQ_DATA_DIR
     # is set when launched through the real launcher, but someone can also
     # cd into a release folder and run setup.py by hand with no env vars
     # set at all — the structural check (this folder is literally named
-    # app_v* directly under a vetzone-releases/ folder) catches that case
+    # app_v* directly under a vetclinicsystemiq-releases/ folder) catches that case
     # too, since re-running enable_updates() from in there would resolve
     # data_dir/releases_dir relative to the WRONG parent and nest a second,
     # broken layout inside the first.
     in_release_folder = (
         os.path.basename(BASE_DIR).startswith("app_v")
-        and os.path.basename(os.path.dirname(BASE_DIR)) == "vetzone-releases"
+        and os.path.basename(os.path.dirname(BASE_DIR)) == "vetclinicsystemiq-releases"
     )
-    already_managed = bool(os.environ.get("VETZONE_DATA_DIR")) or in_release_folder
+    already_managed = bool(os.environ.get("VETCLINICSYSTEMIQ_DATA_DIR")) or in_release_folder
     if already_managed or "--no-enable-updates" in sys.argv:
         print(
             "\nAll set. Start the app with:\n"
             "  python3 app.py\n"
-            "\n(macOS: double-click 'Start Vetzone.command'."
-            "  Windows: double-click 'Start Vetzone.bat'.)\n"
+            "\n(macOS: double-click 'Start VetClinicSystem.command'."
+            "  Windows: double-click 'Start VetClinicSystem.bat'.)\n"
         )
         return
 
@@ -272,10 +272,10 @@ def main():
 # See UPDATE_MECHANISM_PLAN.md §3 for the target layout.
 # ---------------------------------------------------------------------------
 _MACOS_LAUNCHER = """#!/bin/bash
-# Vetzone IQ — supervisor launcher (macOS). Lives in vetzone-data/,
+# VetClinicSystem IQ — supervisor launcher (macOS). Lives in vetclinicsystemiq-data/,
 # OUTSIDE any versioned release folder, so it survives every update.
 # Reads active_release.txt fresh on every loop iteration to know which
-# vetzone-releases/app_vX.Y.Z/ to run, and restarts automatically if the
+# vetclinicsystemiq-releases/app_vX.Y.Z/ to run, and restarts automatically if the
 # app process exits for any reason — a crash, or the deliberate exit
 # updater.py triggers after promoting a new release (see
 # updater.py's _request_restart()). updater.py has already proven the new
@@ -284,12 +284,12 @@ _MACOS_LAUNCHER = """#!/bin/bash
 # script's only job is to keep something running and pick up that change.
 set -u
 DATA_DIR="$(cd "$(dirname "$0")" && pwd)"
-RELEASES_DIR="$(cd "$DATA_DIR/../vetzone-releases" && pwd)"
+RELEASES_DIR="$(cd "$DATA_DIR/../vetclinicsystemiq-releases" && pwd)"
 POINTER="$DATA_DIR/active_release.txt"
-PORT="${VETZONE_PORT:-5050}"
+PORT="${VETCLINICSYSTEMIQ_PORT:-5050}"
 opened_browser=false
 
-echo "Vetzone IQ is running at http://127.0.0.1:$PORT"
+echo "VetClinicSystem IQ is running at http://127.0.0.1:$PORT"
 echo "Leave this window open while you use the app."
 echo "Close this window (or press Control-C) to stop it."
 echo ""
@@ -303,7 +303,7 @@ while true; do
   fi
   RELEASE_DIR="$RELEASES_DIR/$ACTIVE"
   echo "Starting $ACTIVE..."
-  VETZONE_DATA_DIR="$DATA_DIR" VETZONE_RELEASES_DIR="$RELEASES_DIR" VETZONE_PORT="$PORT" \\
+  VETCLINICSYSTEMIQ_DATA_DIR="$DATA_DIR" VETCLINICSYSTEMIQ_RELEASES_DIR="$RELEASES_DIR" VETCLINICSYSTEMIQ_PORT="$PORT" \\
     "$RELEASE_DIR/venv/bin/python3" "$RELEASE_DIR/app.py" &
   APP_PID=$!
 
@@ -313,22 +313,22 @@ while true; do
   fi
 
   wait "$APP_PID"
-  echo "Vetzone IQ exited (code $?) — restarting in 2 seconds..."
+  echo "VetClinicSystem IQ exited (code $?) — restarting in 2 seconds..."
   sleep 2
 done
 """
 
 _WINDOWS_LAUNCHER = """@echo off
-REM Vetzone IQ — supervisor launcher (Windows). Lives in vetzone-data\\,
+REM VetClinicSystem IQ — supervisor launcher (Windows). Lives in vetclinicsystemiq-data\\,
 REM OUTSIDE any versioned release folder, so it survives every update.
 REM Reads active_release.txt fresh on every loop iteration — see the
-REM matching comment in the macOS launcher (Start Vetzone.command) for
+REM matching comment in the macOS launcher (Start VetClinicSystem.command) for
 REM why this loop doesn't need its own health-check/rollback logic.
 setlocal
 set "DATA_DIR=%~dp0"
-set "RELEASES_DIR=%DATA_DIR%..\\vetzone-releases"
+set "RELEASES_DIR=%DATA_DIR%..\\vetclinicsystemiq-releases"
 set "POINTER=%DATA_DIR%active_release.txt"
-if not defined VETZONE_PORT set "VETZONE_PORT=5050"
+if not defined VETCLINICSYSTEMIQ_PORT set "VETCLINICSYSTEMIQ_PORT=5050"
 set "OPENED_BROWSER=0"
 
 :loop
@@ -340,14 +340,14 @@ if not exist "%RELEASES_DIR%\\%ACTIVE%" (
 )
 set "RELEASE_DIR=%RELEASES_DIR%\\%ACTIVE%"
 echo Starting %ACTIVE%...
-set "VETZONE_DATA_DIR=%DATA_DIR%"
-set "VETZONE_RELEASES_DIR=%RELEASES_DIR%"
+set "VETCLINICSYSTEMIQ_DATA_DIR=%DATA_DIR%"
+set "VETCLINICSYSTEMIQ_RELEASES_DIR=%RELEASES_DIR%"
 if "%OPENED_BROWSER%"=="0" (
-  start "" http://127.0.0.1:%VETZONE_PORT%
+  start "" http://127.0.0.1:%VETCLINICSYSTEMIQ_PORT%
   set "OPENED_BROWSER=1"
 )
 "%RELEASE_DIR%\\venv\\Scripts\\python.exe" "%RELEASE_DIR%\\app.py"
-echo Vetzone IQ exited — restarting in 2 seconds...
+echo VetClinicSystem IQ exited — restarting in 2 seconds...
 timeout /t 2 /nobreak >nul
 goto loop
 """
@@ -357,8 +357,8 @@ def _copy_release_snapshot(dest):
     """Copies the current codebase into dest, excluding everything that
     belongs to a specific machine/install rather than the versioned app
     itself (venv, .git, __pycache__, and anything already destined for
-    vetzone-data/)."""
-    exclude = {"venv", ".git", "__pycache__", "logs", ".env", "vetzone-data", "vetzone-releases"}
+    vetclinicsystemiq-data/)."""
+    exclude = {"venv", ".git", "__pycache__", "logs", ".env", "vetclinicsystemiq-data", "vetclinicsystemiq-releases"}
     shutil.copytree(
         BASE_DIR, dest,
         ignore=lambda src, names: [n for n in names if n in exclude or n.startswith(".env")],
@@ -368,13 +368,13 @@ def _copy_release_snapshot(dest):
 def enable_updates(data_dir=None, releases_dir=None):
     step("Switching to the versioned-release layout")
     parent = os.path.dirname(BASE_DIR)
-    data_dir = os.path.abspath(data_dir or os.path.join(parent, "vetzone-data"))
-    releases_dir = os.path.abspath(releases_dir or os.path.join(parent, "vetzone-releases"))
+    data_dir = os.path.abspath(data_dir or os.path.join(parent, "vetclinicsystemiq-data"))
+    releases_dir = os.path.abspath(releases_dir or os.path.join(parent, "vetclinicsystemiq-releases"))
     pointer = os.path.join(data_dir, "active_release.txt")
 
     if os.path.isfile(pointer):
         print(f"  Already enabled — {pointer} exists.")
-        print(f"  VETZONE_DATA_DIR={data_dir}\n  VETZONE_RELEASES_DIR={releases_dir}")
+        print(f"  VETCLINICSYSTEMIQ_DATA_DIR={data_dir}\n  VETCLINICSYSTEMIQ_RELEASES_DIR={releases_dir}")
         return
 
     version_path = os.path.join(BASE_DIR, "VERSION")
@@ -431,8 +431,8 @@ def enable_updates(data_dir=None, releases_dir=None):
     with open(pointer, "w") as f:
         f.write(release_name)
 
-    mac_launcher = os.path.join(data_dir, "Start Vetzone.command")
-    win_launcher = os.path.join(data_dir, "Start Vetzone.bat")
+    mac_launcher = os.path.join(data_dir, "Start VetClinicSystem.command")
+    win_launcher = os.path.join(data_dir, "Start VetClinicSystem.bat")
     with open(mac_launcher, "w", newline="\n") as f:
         f.write(_MACOS_LAUNCHER)
     os.chmod(mac_launcher, 0o755)
@@ -441,12 +441,12 @@ def enable_updates(data_dir=None, releases_dir=None):
 
     print(
         f"\nDone. Add these two lines to {env_dst}:\n\n"
-        f"  VETZONE_DATA_DIR={data_dir}\n"
-        f"  VETZONE_RELEASES_DIR={releases_dir}\n\n"
+        f"  VETCLINICSYSTEMIQ_DATA_DIR={data_dir}\n"
+        f"  VETCLINICSYSTEMIQ_RELEASES_DIR={releases_dir}\n\n"
         f"Then start the app from now on with:\n"
         f"  {mac_launcher}   (macOS)\n"
         f"  {win_launcher}   (Windows)\n\n"
-        f"Not from {os.path.join(BASE_DIR, 'Start Vetzone.command')} anymore — that copy has no "
+        f"Not from {os.path.join(BASE_DIR, 'Start VetClinicSystem.command')} anymore — that copy has no "
         f"way to pick up future updates. This original folder is untouched and safe to keep "
         f"around, but the copy under {releases_dir}/ is what actually runs from now on.\n"
     )

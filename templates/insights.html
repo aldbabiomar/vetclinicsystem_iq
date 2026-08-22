@@ -170,8 +170,16 @@
 <script>
 const REVENUE = {{ revenue|tojson }};
 const PAYMENT_MIX = {{ payment_mix|tojson }};
+// Read from the resolved CSS custom properties (not hardcoded hex) so
+// these charts follow whichever palette/theme is actually active —
+// data-palette (Settings) and data-theme (light/dark) both resolve
+// through the same variables these charts now read live, rather than a
+// second, easy-to-forget color list that'd stay Vetzone's rose/blue
+// regardless of what the rest of the page is showing.
+const _cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const COLORS = {
-  Service: '#B97A7D', Medicine: '#99B9C9', Retail: '#D7BBB2', Boarding: '#7C9D82',
+  Service: _cssVar('--primary'), Medicine: _cssVar('--sidebar-bg'),
+  Retail: _cssVar('--accent-tan'), Boarding: _cssVar('--ok'),
 };
 
 new Chart(document.getElementById('revenueChart'), {
@@ -181,7 +189,7 @@ new Chart(document.getElementById('revenueChart'), {
     datasets: REVENUE.categories.map(cat => ({
       label: cat,
       data: REVENUE.months.map(m => REVENUE.grid[m][cat]),
-      backgroundColor: COLORS[cat] || '#AFA19D',
+      backgroundColor: COLORS[cat] || _cssVar('--muted'),
     })),
   },
   options: {
@@ -197,7 +205,7 @@ new Chart(document.getElementById('paymentChart'), {
     labels: PAYMENT_MIX.map(r => r.method || 'Unspecified'),
     datasets: [{
       data: PAYMENT_MIX.map(r => r.total),
-      backgroundColor: ['#B97A7D', '#99B9C9', '#D7BBB2', '#C99A5C', '#AFA19D'],
+      backgroundColor: [_cssVar('--primary'), _cssVar('--sidebar-bg'), _cssVar('--accent-tan'), _cssVar('--warn'), _cssVar('--muted')],
     }],
   },
   options: { responsive: true, plugins: { legend: { position: 'bottom' } } },

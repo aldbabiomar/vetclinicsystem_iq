@@ -1,21 +1,21 @@
 #!/bin/bash
-# Vetzone IQ — double-click launcher (macOS)
+# VetClinicSystem IQ — double-click launcher (macOS)
 # First run: creates a virtual environment, installs dependencies, sets up
 # PostgreSQL in Docker, loads your data, and switches this install onto
 # the versioned-release layout the in-app updater needs (Settings ->
 # Updates) — automatically, no separate step required. From then on, the
-# app actually runs out of vetzone-data/ (a sibling of this folder, not
+# app actually runs out of vetclinicsystemiq-data/ (a sibling of this folder, not
 # inside it) — every run after the first just hands off to the launcher
 # that lives there.
 
 cd "$(dirname "$0")" || exit 1
 
-DATA_DIR="$(cd .. 2>/dev/null && pwd)/vetzone-data"
+DATA_DIR="$(cd .. 2>/dev/null && pwd)/vetclinicsystemiq-data"
 if [ -f "$DATA_DIR/active_release.txt" ]; then
-  exec "$DATA_DIR/Start Vetzone.command"
+  exec "$DATA_DIR/Start VetClinicSystem.command"
 fi
 
-echo "Vetzone IQ — first-time setup..."
+echo "VetClinicSystem IQ — first-time setup..."
 echo ""
 
 # 1. Create the virtual environment if it doesn't exist yet
@@ -61,4 +61,4 @@ fi
 echo ""
 echo "First-time setup complete — handing off to the real launcher."
 echo ""
-exec "$DATA_DIR/Start Vetzone.command"
+exec "$DATA_DIR/Start VetClinicSystem.command"

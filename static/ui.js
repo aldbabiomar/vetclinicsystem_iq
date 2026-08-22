@@ -175,7 +175,7 @@
   // ---------------------------------------------------------------
   function initCollapsibleGroups() {
     document.querySelectorAll(".nav-group[data-collapsible]").forEach(function (group) {
-      const key = "vetzoneiq-navgroup-" + group.dataset.collapsible;
+      const key = "vetclinicsystemiq-navgroup-" + group.dataset.collapsible;
       const header = group.querySelector(".nav-group-toggle");
       if (!header) return;
       const collapsed = localStorage.getItem(key) === "closed";
