@@ -1,5 +1,5 @@
 """
-"Start Vetzone IQ automatically when this computer starts" — the Settings
+"Start VetClinicSystem IQ automatically when this computer starts" — the Settings
 page toggle for this installs/removes a normal OS login item, the same
 mechanism any desktop app uses; it isn't a background service and doesn't
 need admin/root privileges to set up.
@@ -20,7 +20,7 @@ import os
 import platform
 import subprocess
 
-AGENT_LABEL = "com.vetzoneiq.autostart"
+AGENT_LABEL = "com.vetclinicsystemiq.autostart"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -33,7 +33,7 @@ def _macos_plist_path():
 
 
 def _macos_launcher_path():
-    return os.path.join(BASE_DIR, "Start Vetzone.command")
+    return os.path.join(BASE_DIR, "Start VetClinicSystem.command")
 
 
 def _windows_startup_dir():
@@ -45,11 +45,11 @@ def _windows_startup_dir():
 
 def _windows_shortcut_path():
     d = _windows_startup_dir()
-    return os.path.join(d, "Vetzone IQ.bat") if d else None
+    return os.path.join(d, "VetClinicSystem IQ.bat") if d else None
 
 
 def _windows_launcher_path():
-    return os.path.join(BASE_DIR, "Start Vetzone.bat")
+    return os.path.join(BASE_DIR, "Start VetClinicSystem.bat")
 
 
 def is_enabled():
@@ -83,7 +83,7 @@ def disable():
 def _macos_enable():
     launcher = _macos_launcher_path()
     if not os.path.isfile(launcher):
-        return False, "Could not find \u201cStart Vetzone.command\u201d next to app.py — can't set up automatic startup."
+        return False, "Could not find \u201cStart VetClinicSystem.command\u201d next to app.py — can't set up automatic startup."
     plist_path = _macos_plist_path()
     log_dir = os.path.join(BASE_DIR, "logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -118,7 +118,7 @@ def _macos_enable():
         if result.returncode != 0:
             os.remove(plist_path)
             return False, f"Could not register automatic startup: {result.stderr.strip() or 'launchctl failed.'}"
-        return True, "Vetzone IQ will now start automatically when you log in."
+        return True, "VetClinicSystem IQ will now start automatically when you log in."
     except OSError as e:
         return False, f"Could not set up automatic startup: {e}"
 
@@ -138,7 +138,7 @@ def _macos_disable():
 def _windows_enable():
     launcher = _windows_launcher_path()
     if not os.path.isfile(launcher):
-        return False, "Could not find \u201cStart Vetzone.bat\u201d next to app.py — can't set up automatic startup."
+        return False, "Could not find \u201cStart VetClinicSystem.bat\u201d next to app.py — can't set up automatic startup."
     shortcut_path = _windows_shortcut_path()
     if not shortcut_path:
         return False, "Could not find this account's Startup folder (%APPDATA% isn't set)."
@@ -150,7 +150,7 @@ def _windows_enable():
         # exactly the same way it runs shortcuts placed there.
         with open(shortcut_path, "w") as f:
             f.write(f'@echo off\r\ncall "{launcher}"\r\n')
-        return True, "Vetzone IQ will now start automatically when you log in."
+        return True, "VetClinicSystem IQ will now start automatically when you log in."
     except OSError as e:
         return False, f"Could not set up automatic startup: {e}"
 

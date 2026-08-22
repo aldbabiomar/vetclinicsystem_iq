@@ -1,22 +1,22 @@
 @echo off
-REM Vetzone IQ — double-click launcher (Windows)
+REM VetClinicSystem IQ — double-click launcher (Windows)
 REM First run: creates a virtual environment, installs dependencies, sets up
 REM PostgreSQL in Docker, loads your data, and switches this install onto
 REM the versioned-release layout the in-app updater needs (Settings ->
 REM Updates) — automatically, no separate step required. From then on, the
-REM app actually runs out of vetzone-data\ (a sibling of this folder, not
+REM app actually runs out of vetclinicsystemiq-data\ (a sibling of this folder, not
 REM inside it) — every run after the first just hands off to the launcher
 REM that lives there.
 
 cd /d "%~dp0"
 
-set "DATA_DIR=%~dp0..\vetzone-data"
+set "DATA_DIR=%~dp0..\vetclinicsystemiq-data"
 if exist "%DATA_DIR%\active_release.txt" (
-    call "%DATA_DIR%\Start Vetzone.bat"
+    call "%DATA_DIR%\Start VetClinicSystem.bat"
     exit /b %errorlevel%
 )
 
-echo Vetzone IQ - first-time setup...
+echo VetClinicSystem IQ - first-time setup...
 echo.
 
 REM 1. Create the virtual environment if it doesn't exist yet
@@ -64,4 +64,4 @@ if not exist "%DATA_DIR%\active_release.txt" (
 echo.
 echo First-time setup complete — handing off to the real launcher.
 echo.
-call "%DATA_DIR%\Start Vetzone.bat"
+call "%DATA_DIR%\Start VetClinicSystem.bat"

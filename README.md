@@ -1,9 +1,12 @@
-# Vetzone IQ — clinic management system
+# VetClinicSystem IQ — clinic management system
 
-A full clinic management system for Vetzone IQ (Baghdad, Iraq) — patients, visits,
+A full clinic management system for veterinary clinics — patients, visits,
 inpatient care, wellness & grooming tracking, appointments, a point of sale,
 inventory & ordering, billing, and P&L reporting — running entirely on one
-computer in the clinic, reachable from any device on the clinic's WiFi.
+computer in the clinic, reachable from any device on the clinic's WiFi. The
+same codebase deploys independently per clinic (each with its own database
+and its own clinic name/color palette set in Settings) — see
+`RENAME_AND_PALETTE_PLAN.md` for how that's wired up.
 
 Everything lives in a **PostgreSQL** database (running in Docker on the same
 computer) so multiple staff can safely use the app at the same time — no
@@ -16,8 +19,8 @@ needs to be installed once.
 
 **One-time only:**
 1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) (free) and open it once so it finishes starting up.
-2. **macOS:** double-click `Start Vetzone.command` (first time, macOS will refuse to open it — right-click → **Open** → **Open** again; you only need to do this once).
-   **Windows:** double-click `Start Vetzone.bat`.
+2. **macOS:** double-click `Start VetClinicSystem.command` (first time, macOS will refuse to open it — right-click → **Open** → **Open** again; you only need to do this once).
+   **Windows:** double-click `Start VetClinicSystem.bat`.
 
 That single script creates the Python environment, installs dependencies,
 starts PostgreSQL, and sets up the database, seeding it with the clinic's
@@ -183,7 +186,7 @@ can also click **Back Up Now** any time.
 To restore a backup (only needed if you're recovering from a serious
 problem):
 ```bash
-pg_restore --clean --if-exists -d "$DATABASE_URL" path/to/vetzone_backup_XXXXXXXX_XXXXXX.dump
+pg_restore --clean --if-exists -d "$DATABASE_URL" path/to/vetclinicsystemiq_backup_XXXXXXXX_XXXXXX.dump
 ```
 
 ## Running on multiple computers / higher traffic
@@ -195,7 +198,7 @@ Docker container — nothing else in the app needs to change.
 
 ## Your data
 
-Everything lives in PostgreSQL (inside the `vetzone_pgdata` Docker volume) —
+Everything lives in PostgreSQL (inside the `vetclinicsystemiq_pgdata` Docker volume) —
 see **Nightly Backups** above for how it's backed up automatically.
 Uploaded X-rays/bloodwork still live in the `uploads/` folder alongside the
 app — that folder isn't part of the database backup, so also back it up

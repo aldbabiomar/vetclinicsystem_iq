@@ -85,6 +85,85 @@ html[data-theme="dark"] .appt-chip.grooming { color: #F1D9CD; }
    same-purpose highlight instead of white-on-white. */
 html[data-theme="dark"] .nav-link.active { box-shadow: none; border: 1px solid rgba(243,233,230,0.14); }
 
+/* ---- ChamPet palette (light) ---- */
+html[data-palette="champet"] {
+  --bg: #F5F8FA;
+  --paper: #FFFFFF;
+  --ink: #212B3D;
+  --ink-soft: #7C879A;
+  --line: #E2E8EF;
+  --line-soft: #EEF2F6;
+
+  --primary: #1B9CBE;
+  --primary-dark: #147089;
+  --primary-tint: #E3F5FA;
+  --primary-pastel: #6BC0D6; /* derived: same ~40% primary→tint blend ratio as Vetzone's own pastel */
+
+  --sidebar-bg: #293659;
+  --sidebar-ink: #E7ECF5;
+  --sidebar-muted: #92A0BE;
+  --sidebar-active: #37477A;
+  --sidebar-active-ink: #E7ECF5; /* derived: active pill is a lighter navy, not white, so text stays light */
+
+  --accent-tan: #8478B0;       /* placeholder — needs sign-off, see plan's gap note */
+  --accent-tan-tint: #EFEBF7;  /* placeholder, paired with the above */
+
+  --ok: #4C9B79;
+  --ok-tint: #E9F4EE;
+  --warn: #C08A3C;
+  --warn-tint: #FAF1E1;
+  --danger: #C15B4E;
+  --danger-tint: #FAEAE7;
+  --muted: #9BA5B7;
+  --muted-tint: #EEF1F5;
+
+  --shadow-sm: 0 1px 2px rgba(33,43,61,0.05);
+  --shadow: 0 2px 10px rgba(33,43,61,0.06), 0 1px 2px rgba(33,43,61,0.04);
+  --shadow-lg: 0 16px 48px rgba(33,43,61,0.16);
+}
+
+/* ---- ChamPet palette (dark) ---- */
+html[data-palette="champet"][data-theme="dark"] {
+  --bg: #10141C;
+  --paper: #1A2130;
+  --ink: #E7ECF5;
+  --ink-soft: #8C97B0;
+  --line: #2C3547;
+  --line-soft: #212838;
+
+  --primary: #3FB8D6;
+  --primary-dark: #63C9E2;   /* lighter than --primary here, matching Vetzone's dark-mode flip */
+  --primary-tint: #16303A;
+  --primary-pastel: #6BC0D6; /* unchanged from light — Vetzone keeps this identical across modes too */
+
+  --sidebar-bg: #1E2740;     /* deepened slightly, not inverted — ChamPet's sidebar is already dark in light mode */
+  --sidebar-ink: #E7ECF5;
+  --sidebar-muted: #7C89A8;
+  --sidebar-active: #2F3D63;
+  --sidebar-active-ink: #E7ECF5;
+
+  --accent-tan: #8478B0;     /* unchanged from light, same pattern as Vetzone's accent-tan */
+  --accent-tan-tint: #2A2438;
+
+  --ok: #6FBE9B;
+  --ok-tint: #1B2E24;
+  --warn: #DDA85E;
+  --warn-tint: #33270F;
+  --danger: #DD8172;
+  --danger-tint: #33201B;
+  --muted: #8791A8;
+  --muted-tint: #232838;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.35);
+  --shadow: 0 2px 10px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-lg: 0 16px 48px rgba(0,0,0,0.55);
+}
+
+/* Component-level dark-mode fix, mirroring the one Vetzone needs at the
+   .appt-chip.grooming rule above, for the same reason under ChamPet's own
+   accent-tan hue: */
+html[data-palette="champet"][data-theme="dark"] .appt-chip.grooming { color: #E4DEF2; }
+
 html, body {
   transition: background-color 0.2s ease, color 0.2s ease;
 }

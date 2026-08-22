@@ -42,7 +42,7 @@ from datetime import datetime
 os.environ.setdefault("_RECONCILE_BASE_DIR", os.path.dirname(os.path.abspath(__file__)))
 
 from dotenv import load_dotenv
-_data_dir = os.environ.get("VETZONE_DATA_DIR")
+_data_dir = os.environ.get("VETCLINICSYSTEMIQ_DATA_DIR")
 if _data_dir:
     load_dotenv(os.path.join(_data_dir, ".env"))
 else:
@@ -54,7 +54,7 @@ import attachments as attach_mod
 # Matches attachments.py's _safe_name(): "<14-digit timestamp>_<6 hex>_<original name>".
 FILENAME_RE = re.compile(r"^(\d{14})_[0-9a-f]{6}_(.+)$")
 # Matches backup.py's FILENAME_PREFIX/FILENAME_SUFFIX naming exactly.
-BACKUP_FILENAME_RE = re.compile(r"^vetzone_backup_(\d{8}_\d{6})\.dump$")
+BACKUP_FILENAME_RE = re.compile(r"^vetclinicsystemiq_backup_(\d{8}_\d{6})\.dump$")
 
 LOG_DIR = os.path.join(_data_dir or os.environ["_RECONCILE_BASE_DIR"], "logs")
 LOG_PATH = os.path.join(LOG_DIR, "reconcile_attachments.log")
@@ -108,7 +108,7 @@ def restored_backup_snapshot_time(db):
     """Returns the datetime the most recently restored backup was itself
     CREATED — not when the restore ran, which is a materially different
     (later) moment. Parsed from restore_log.source_file, whose filename
-    backup.py always writes as vetzone_backup_YYYYMMDD_HHMMSS.dump.
+    backup.py always writes as vetclinicsystemiq_backup_YYYYMMDD_HHMMSS.dump.
 
     This is the correct cutoff, not restore_log.started_at: a file
     uploaded before the backup was taken is faithfully represented in the

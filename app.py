@@ -15,13 +15,13 @@ from datetime import date, datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
-# On the versioned-release layout (VETZONE_DATA_DIR set by the launcher
+# On the versioned-release layout (VETCLINICSYSTEMIQ_DATA_DIR set by the launcher
 # script — see updater.py / setup.py --enable-updates), .env lives in the
 # data dir, not next to this file, and code here runs from a release
 # folder whose working directory at launch isn't guaranteed. Falls back to
 # load_dotenv()'s normal upward search from cwd otherwise, unchanged from
 # before this option existed.
-_data_dir = os.environ.get("VETZONE_DATA_DIR")
+_data_dir = os.environ.get("VETCLINICSYSTEMIQ_DATA_DIR")
 if _data_dir:
     load_dotenv(os.path.join(_data_dir, ".env"))
 else:
@@ -99,7 +99,7 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(
 # devices) restrict which source addresses can reach the app at all,
 # independent of and in addition to login/permissions.
 _ALLOWED_NETWORKS = []
-for _cidr in os.environ.get("VETZONE_ALLOWED_NETWORKS", "").split(","):
+for _cidr in os.environ.get("VETCLINICSYSTEMIQ_ALLOWED_NETWORKS", "").split(","):
     _cidr = _cidr.strip()
     if _cidr:
         _ALLOWED_NETWORKS.append(ipaddress.ip_network(_cidr, strict=False))
@@ -176,7 +176,7 @@ def add_security_headers(resp):
 ERROR_LOG_PATH = os.path.join(BASE_DIR, "logs", "errors.log")
 os.makedirs(os.path.dirname(ERROR_LOG_PATH), exist_ok=True)
 
-error_logger = logging.getLogger("vetzone.errors")
+error_logger = logging.getLogger("vetclinicsystemiq.errors")
 error_logger.setLevel(logging.ERROR)
 if not error_logger.handlers:
     _err_handler = logging.handlers.RotatingFileHandler(
@@ -305,6 +305,22 @@ def has_negative(*values):
     checks fine, so this is the separate guard for fields where negative
     is never a valid real-world value."""
     return any(v is not None and v < 0 for v in values)
+
+
+def static_asset(base_filename, palette):
+    """Palette-branches a static filename: for the default 'vetzone'
+    palette, returns base_filename unchanged; for any other palette,
+    inserts '-<palette>' before the extension (e.g. 'favicon-v2.ico' ->
+    'favicon-v2-champet.ico'). Used for every logo/favicon/error
+    illustration that has a palette-matched variant, so the branching
+    logic lives in one place instead of a repeated ternary at each call
+    site across base.html, login.html, and _error_dog.html. Registered as
+    a Jinja global below so templates can call it directly, wrapped in
+    the usual url_for('static', filename=...)."""
+    if not palette or palette == "vetzone":
+        return base_filename
+    name, ext = base_filename.rsplit(".", 1)
+    return f"{name}-{palette}.{ext}"
 
 
 class BadDate(ValueError):
@@ -545,6 +561,7 @@ def pagination_url(page, page_param="page"):
 
 app.jinja_env.globals["pagination_url"] = pagination_url
 app.jinja_env.globals["has_permission"] = auth.has_permission
+app.jinja_env.globals["static_asset"] = static_asset
 
 
 # ---------------------------------------------------------------------------
@@ -560,8 +577,13 @@ def favicon_ico():
     # without this route there's nothing at /favicon.ico at all (only at
     # /static/favicon-v2.ico), so Safari can end up falling back to
     # whatever it last had cached for this origin instead of picking up
-    # the new icon.
-    return send_from_directory(app.static_folder, "favicon-v2.ico")
+    # the new icon. Not a Jinja render, so theme_palette isn't available
+    # from inject_globals() here — read the setting directly.
+    try:
+        palette = logic.get_setting(get_db(), "theme_palette", "vetzone")
+    except Exception:
+        palette = "vetzone"
+    return send_from_directory(app.static_folder, static_asset("favicon-v2.ico", palette))
 
 
 @app.before_request
@@ -590,9 +612,16 @@ def inject_globals():
     trying to *show* the first one."""
     try:
         db = get_db()
-        clinic_name = logic.get_setting(db, "clinic_name", "Vetzone IQ")
+        clinic_name = logic.get_setting(db, "clinic_name", "VetClinicSystem IQ")
         clinic_location = logic.get_setting(db, "clinic_location", "Baghdad, Iraq")
-        ctx = dict(clinic_name=clinic_name, clinic_location=clinic_location, today=date.today().isoformat(),
+        # Clinic-wide, not per-user — read from the DB-backed setting (same
+        # as clinic_name above), not localStorage, so it applies before
+        # first paint from the server render itself rather than needing a
+        # client-side before-paint script the way the per-user dark/light
+        # toggle does (see base.html's inline script).
+        theme_palette = logic.get_setting(db, "theme_palette", "vetzone")
+        ctx = dict(clinic_name=clinic_name, clinic_location=clinic_location, theme_palette=theme_palette,
+                   today=date.today().isoformat(),
                    current_role=session.get("role"), current_username=session.get("username"),
                    is_system_admin=auth.is_system_admin(), session_user_id=session.get("user_id"))
         if session.get("user_id"):
@@ -612,7 +641,7 @@ def inject_globals():
             request.method, request.path, traceback.format_exc()
         )
         return dict(
-            clinic_name="Vetzone IQ", clinic_location="",
+            clinic_name="VetClinicSystem IQ", clinic_location="", theme_palette="vetzone",
             today=date.today().isoformat(),
             current_role=session.get("role"), current_username=session.get("username"),
             alert_count=0, is_system_admin=False, session_user_id=session.get("user_id"),
@@ -1297,7 +1326,7 @@ def api_browse_folder():
         path = os.path.abspath(configured) if configured and os.path.isdir(configured) else os.path.expanduser("~")
 
     if not os.path.isdir(path):
-        return jsonify({"error": f"\u201c{path}\u201d isn\u2019t a folder Vetzone IQ can see on this computer."}), 400
+        return jsonify({"error": f"\u201c{path}\u201d isn\u2019t a folder VetClinicSystem IQ can see on this computer."}), 400
 
     try:
         entries = os.listdir(path)
@@ -2744,7 +2773,7 @@ def inventory_barcode_label(item_id):
 @app.route("/inventory-catalog/barcodes/generated")
 @auth.permission_required("manage_inventory_catalog")
 def inventory_catalog_barcodes_generated():
-    """Every active item with a Vetzone-created barcode (not a real
+    """Every active item with a VetClinicSystem-created barcode (not a real
     manufacturer code), across the whole catalog regardless of which page
     of Inventory Catalog is showing — feeds the Bulk Barcode Print
     picker."""
@@ -5090,6 +5119,16 @@ def settings_page():
         # until someone fixes the row directly in the database. The <input
         # type="time"> in the template stops this in the normal UI, but
         # that's client-side only, so it's validated here too.
+        # theme_palette flows straight into an HTML attribute (base.html's
+        # data-palette) with no escaping beyond Jinja's default autoescape —
+        # a plain whitelist rather than trusting the submitted value, same
+        # reasoning as every other settings field validated in this route.
+        THEME_PALETTES = ("vetzone", "champet")
+        palette_val = request.form.get("theme_palette")
+        if palette_val is not None and palette_val not in THEME_PALETTES:
+            flash("Not a valid color palette.", "error")
+            return redirect(url_for("settings_page"))
+
         TIME_FIELDS = ["appt_start_time", "appt_end_time", "backup_time"]
         for key in TIME_FIELDS:
             val = request.form.get(key)
@@ -5116,7 +5155,7 @@ def settings_page():
         orphaned_before = len(logic.orphaned_appointments(db))
         for key in ["clinic_name", "clinic_location", "audit_overdue_days", "expiry_soon_days", "opening_date",
                     "appt_start_time", "appt_end_time", "appt_slot_minutes",
-                    "backup_dir", "backup_time", "backup_retention"]:
+                    "backup_dir", "backup_time", "backup_retention", "theme_palette"]:
             val = request.form.get(key)
             if val is not None:
                 old = logic.get_setting(db, key)
@@ -5372,7 +5411,7 @@ if __name__ == "__main__":
         take one more backup as a last safety net, then exit cleanly
         instead of being hard-killed mid-request.
         """
-        print("\nVetzone IQ is shutting down \u2014 taking a final backup first...")
+        print("\nVetClinicSystem IQ is shutting down \u2014 taking a final backup first...")
         try:
             db = dbmod.connect()
             try:
@@ -5397,7 +5436,7 @@ if __name__ == "__main__":
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, _graceful_shutdown)
 
-    if os.environ.get("VETZONE_DEV") == "1":
+    if os.environ.get("VETCLINICSYSTEMIQ_DEV") == "1":
         # Flask's dev server — convenient for local debugging only; not used
         # for normal clinic operation.
         app.run(debug=True, host="0.0.0.0", port=5050)
@@ -5410,9 +5449,9 @@ if __name__ == "__main__":
         # Waitress itself never terminates TLS (by its own design —
         # BEHIND_TLS_PROXY above is how this app supports HTTPS: via a
         # reverse proxy in front, not a certificate handed to serve()).
-        bind_host = os.environ.get("VETZONE_HOST", "0.0.0.0")
-        bind_port = int(os.environ.get("VETZONE_PORT", "5050"))
+        bind_host = os.environ.get("VETCLINICSYSTEMIQ_HOST", "0.0.0.0")
+        bind_port = int(os.environ.get("VETCLINICSYSTEMIQ_PORT", "5050"))
         scheme = "https" if BEHIND_TLS_PROXY else "http"
-        print(f"Vetzone IQ is running — reachable on the clinic network at "
+        print(f"VetClinicSystem IQ is running — reachable on the clinic network at "
               f"{scheme}://{lan_address()}:{bind_port}")
         serve(app, host=bind_host, port=bind_port, threads=8)

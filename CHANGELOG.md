@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Vetzone IQ are documented in this file, in
+All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
 ## [1.4.6] - 2026-08-22

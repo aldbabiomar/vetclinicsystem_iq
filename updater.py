@@ -1,6 +1,6 @@
 """
 Handles checking for, downloading, and applying updates from GitHub
-Releases. Never touches vetzone-data/ except to read/write
+Releases. Never touches vetclinicsystemiq-data/ except to read/write
 active_release.txt, write to logs/updates.log, and invoke backup.py
 before an update.
 
@@ -9,7 +9,7 @@ Consumer side of CLAUDE_CODE_RELEASE_WORKFLOW.md / UPDATE_MECHANISM_PLAN.md
 module's expectations of it are one system split across two docs.
 
 Requires this install to be on the versioned-release layout (see
-setup.py's --enable-updates) — VETZONE_DATA_DIR and VETZONE_RELEASES_DIR
+setup.py's --enable-updates) — VETCLINICSYSTEMIQ_DATA_DIR and VETCLINICSYSTEMIQ_RELEASES_DIR
 must both be set. is_configured() is False otherwise, and the Settings
 page shows an explanatory message instead of the update UI.
 """
@@ -29,8 +29,8 @@ import urllib.error
 
 import requests
 
-DATA_DIR = os.environ.get("VETZONE_DATA_DIR")
-RELEASES_DIR = os.environ.get("VETZONE_RELEASES_DIR")
+DATA_DIR = os.environ.get("VETCLINICSYSTEMIQ_DATA_DIR")
+RELEASES_DIR = os.environ.get("VETCLINICSYSTEMIQ_RELEASES_DIR")
 GITHUB_REPO = os.environ.get("GITHUB_REPO")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -122,7 +122,7 @@ def is_update_available():
 
 def _run_backup():
     """Backs up the live database before touching anything else — always,
-    no exceptions. Uses a dedicated folder under vetzone-data/ rather than
+    no exceptions. Uses a dedicated folder under vetclinicsystemiq-data/ rather than
     trusting the backup_dir setting, so this never silently no-ops just
     because an admin hasn't configured a backup folder on the Settings
     page. Returns the backup file path, or None on failure."""
@@ -235,8 +235,8 @@ def _probe_health(release_path, timeout=20):
     py = _venv_python(release_path)
     port = _free_port()
     env = dict(os.environ)
-    env["VETZONE_PORT"] = str(port)
-    env["VETZONE_HOST"] = "127.0.0.1"
+    env["VETCLINICSYSTEMIQ_PORT"] = str(port)
+    env["VETCLINICSYSTEMIQ_HOST"] = "127.0.0.1"
     proc = subprocess.Popen([py, "app.py"], cwd=release_path, env=env,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -290,7 +290,7 @@ def _prune_old_releases(keep):
 def _request_restart(delay=2.0):
     """The only cross-platform-safe way for this process to hand control
     to the newly-promoted release is to exit and let the launcher script's
-    supervisor loop (see Start Vetzone.command / .bat) restart it — that
+    supervisor loop (see Start VetClinicSystem.command / .bat) restart it — that
     loop is what re-reads active_release.txt and actually starts serving
     the new version. delay gives the HTTP response for the update request
     a moment to flush before the process disappears."""

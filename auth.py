@@ -1,6 +1,6 @@
 """
 Authentication, roles, permissions, audit trail, and discount-cap logic for
-Vetzone IQ.
+VetClinicSystem IQ.
 """
 import uuid
 from datetime import datetime, timedelta

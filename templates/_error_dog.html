@@ -5,5 +5,5 @@
    from the semantic names ('lost'/'stop'/'broken') the three error
    templates already pass in. #}
 {% set variant_file = {"lost": "404", "stop": "403", "broken": "500"}[variant] %}
-<img class="error-dog" src="{{ url_for('static', filename='error-' + variant_file + '.png') }}" alt="">
+<img class="error-dog" src="{{ url_for('static', filename=static_asset('error-' + variant_file + '.png', theme_palette)) }}" alt="">
 

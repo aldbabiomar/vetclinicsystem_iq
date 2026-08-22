@@ -1,19 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-palette="{{ theme_palette or 'vetzone' }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ clinic_name }}{% endblock %}</title>
 <meta name="csrf-token" content="{{ csrf_token() }}">
-<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon-v2.ico') }}">
-<link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-v2-32.png') }}">
-<link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon-v2-180.png') }}">
+<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename=static_asset('favicon-v2.ico', theme_palette)) }}">
+<link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename=static_asset('favicon-v2-32.png', theme_palette)) }}">
+<link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename=static_asset('favicon-v2-180.png', theme_palette)) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <script>
 // Applied before first paint so switching themes never shows a flash of the other theme.
 (function() {
   try {
-    var saved = localStorage.getItem('vetzoneiq-theme');
+    var saved = localStorage.getItem('vetclinicsystemiq-theme');
     if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
   } catch (e) {}
 })();
@@ -36,8 +36,8 @@
     <button class="sidebar-close-btn" onclick="closeSidebar()" aria-label="Close menu">&times;</button>
     <div class="brand">
       <span class="mark">
-        <img class="brand-logo-light" src="{{ url_for('static', filename='logo-sidebar-light.png') }}" alt="">
-        <img class="brand-logo-dark" src="{{ url_for('static', filename='logo-sidebar-dark.png') }}" alt="">
+        <img class="brand-logo-light" src="{{ url_for('static', filename=static_asset('logo-sidebar-light.png', theme_palette)) }}" alt="">
+        <img class="brand-logo-dark" src="{{ url_for('static', filename=static_asset('logo-sidebar-dark.png', theme_palette)) }}" alt="">
       </span>
       <span class="brand-name">{{ clinic_name }}</span>
       <button type="button" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle dark mode">
@@ -195,7 +195,7 @@ function toggleTheme() {
   } else {
     document.documentElement.setAttribute('data-theme', 'dark');
   }
-  try { localStorage.setItem('vetzoneiq-theme', isDark ? 'light' : 'dark'); } catch (e) {}
+  try { localStorage.setItem('vetclinicsystemiq-theme', isDark ? 'light' : 'dark'); } catch (e) {}
 }
 </script>
 <script src="{{ url_for('static', filename='ui.js') }}"></script>

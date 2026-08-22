@@ -8,7 +8,7 @@ serve()/app.run() in app.py) with no task queue or multi-worker
 deployment, so an in-memory registry protected by a lock is the
 right-sized tool here — it doesn't need to survive a process restart, and
 it doesn't need to coordinate across worker processes that don't exist.
-If Vetzone IQ ever moves to multiple worker processes, this would need to
+If VetClinicSystem IQ ever moves to multiple worker processes, this would need to
 move to something shared across them (Postgres itself, most simply); it's
 explicitly not that today.
 

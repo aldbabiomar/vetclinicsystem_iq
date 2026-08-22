@@ -1,4 +1,4 @@
--- Vetzone IQ database schema — v3 (PostgreSQL)
+-- VetClinicSystem IQ database schema — v3 (PostgreSQL)
 -- Ported from the original SQLite schema.sql. Table/column names, types,
 -- and constraints are unchanged except: AUTOINCREMENT -> IDENTITY, and
 -- REAL -> DOUBLE PRECISION (same practical behavior, more standard on PG).
@@ -220,7 +220,7 @@ CREATE TABLE IF NOT EXISTS inventory_list (
     barcode TEXT UNIQUE,
     -- Which of the two mutually-exclusive ways this item's barcode was set
     -- up: a real code entered/scanned in from the manufacturer's own
-    -- packaging, or one Vetzone IQ generated internally. NULL alongside a
+    -- packaging, or one VetClinicSystem IQ generated internally. NULL alongside a
     -- NULL barcode when neither has ever been set up. Never both at once —
     -- enforced in app.py, not just here.
     barcode_source TEXT CHECK (barcode_source IN ('manual','generated')),

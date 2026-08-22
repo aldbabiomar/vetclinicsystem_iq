@@ -1,5 +1,5 @@
 """
-Database backups for Vetzone IQ.
+Database backups for VetClinicSystem IQ.
 
 Runs `pg_dump` against the running Postgres database and writes a
 timestamped, restorable dump file into whatever folder is configured on
@@ -19,7 +19,7 @@ from datetime import datetime
 
 import logic
 
-FILENAME_PREFIX = "vetzone_backup_"
+FILENAME_PREFIX = "vetclinicsystemiq_backup_"
 FILENAME_SUFFIX = ".dump"
 
 # Guards every operation that runs pg_dump or pg_restore against the live
@@ -52,7 +52,7 @@ def _pg_conn_parts():
         host, port = (hostport.split(":", 1) + ["5432"])[:2]
         return user, dbname, host, port
     except Exception:
-        return "vetzone", "vetzone", "127.0.0.1", "5432"
+        return "vetclinicsystemiq", "vetclinicsystemiq", "127.0.0.1", "5432"
 
 
 def _run_pg_dump(out_path):
@@ -64,7 +64,7 @@ def _run_pg_dump(out_path):
         subprocess.run(cmd, check=True, env=env, capture_output=True, text=True)
         return
 
-    container = os.environ.get("VETZONE_PG_CONTAINER", "vetzone_postgres")
+    container = os.environ.get("VETCLINICSYSTEMIQ_PG_CONTAINER", "vetclinicsystemiq_postgres")
     if shutil.which("docker"):
         cmd = ["docker", "exec", container, "pg_dump", "-U", user, "-F", "c", dbname]
         with open(out_path, "wb") as f:
@@ -105,7 +105,7 @@ def resolve_restorable_backup(db, source_file):
     if not source_file:
         return False, None, "Choose a backup file to restore from."
     if not source_file.endswith(FILENAME_SUFFIX):
-        return False, None, f"That doesn't look like a Vetzone IQ backup file (expected a {FILENAME_SUFFIX} file)."
+        return False, None, f"That doesn't look like a VetClinicSystem IQ backup file (expected a {FILENAME_SUFFIX} file)."
 
     backup_dir = logic.get_setting(db, "backup_dir")
     if not backup_dir:
@@ -136,7 +136,7 @@ def resolve_restorable_backup(db, source_file):
     if not row:
         return False, None, (
             "That file isn't in this app's own backup history — restore is only allowed for "
-            "backups Vetzone IQ itself created (see Recent Backups on the Settings page)."
+            "backups VetClinicSystem IQ itself created (see Recent Backups on the Settings page)."
         )
     return True, source_file, None
 
@@ -182,7 +182,7 @@ def _run_backup_locked(db, dest_dir=None, retention=None, triggered_by=None, on_
     step(0)  # Checking backup folder
     try:
         os.makedirs(dest_dir, exist_ok=True)
-        probe = os.path.join(dest_dir, ".vetzone_write_test")
+        probe = os.path.join(dest_dir, ".vetclinicsystemiq_write_test")
         with open(probe, "w") as f:
             f.write("ok")
         os.remove(probe)
@@ -220,7 +220,7 @@ def _pg_restore_toc_count(list_cmd):
     Runs `pg_restore --list` (locally or via docker exec, whichever
     list_cmd specifies) and counts real entries in the table of contents,
     for a real X-of-Y figure during the restore rather than a guess. TOC
-    lines look like "123; 1259 12345 TABLE public visits vetzone" —
+    lines look like "123; 1259 12345 TABLE public visits vetclinicsystemiq" —
     comment/blank lines (starting with ';', or empty) don't count.
     Returns None if the listing fails for any reason; callers fall back
     to phase-only progress when that happens.
@@ -284,7 +284,7 @@ def _run_pg_restore(dump_path, on_count=None):
             raise subprocess.CalledProcessError(proc.returncode, cmd, output=None, stderr=stderr_text)
         return
 
-    container = os.environ.get("VETZONE_PG_CONTAINER", "vetzone_postgres")
+    container = os.environ.get("VETCLINICSYSTEMIQ_PG_CONTAINER", "vetclinicsystemiq_postgres")
     if shutil.which("docker"):
         # docker exec can't read a file straight off the host, so the dump
         # has to be copied into the container first.
@@ -355,7 +355,7 @@ def _run_restore_locked(get_fresh_db, dump_path, triggered_by=None, on_progress=
     if not dump_path or not os.path.isfile(dump_path):
         return False, "Choose a valid backup file to restore from."
     if not dump_path.endswith(FILENAME_SUFFIX):
-        return False, f"That doesn't look like a Vetzone IQ backup file (expected a {FILENAME_SUFFIX} file)."
+        return False, f"That doesn't look like a VetClinicSystem IQ backup file (expected a {FILENAME_SUFFIX} file)."
 
     started = datetime.now()
     step(1, "Restoring database")
