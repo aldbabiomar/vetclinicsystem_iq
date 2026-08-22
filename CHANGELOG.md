@@ -3,6 +3,35 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.4.6] - 2026-08-22
+
+### Fixed
+- The Dashboard's "Missed Items" review panel and its operating-costs/backup-alert
+  banners were still gated on the role literally being named "Admin," even though the
+  page had already been switched to checking real permissions instead. A custom role
+  granted the right permissions (e.g. a "Practice Manager" role with `manage_settings`)
+  never saw these panels at all, including backup-failure alerts.
+- A patient's "Full History" page silently omitted boarding stays — it only pulled
+  from visits and inpatient cases, even though boarding is tracked as its own record
+  type with its own dates and billing.
+- Booking a grooming appointment didn't force its resource ID to blank, so a crafted
+  request could silently double- (or many-times-) book a grooming slot in a way that
+  never appeared on the schedule grid and wasn't caught by the "needs attention"
+  fallback list either. Vet appointments now also validate the vet and time slot are
+  real before booking, instead of trusting whatever the form submitted.
+- Boarding admission/edit accepted a negative price-per-day or total with no guard,
+  which could silently reduce or negate a month's reported revenue.
+- Boarding payments had no cap against the outstanding balance and no lock — unlike
+  every other payment-entry point in the app, there's also no way to delete or correct
+  a boarding payment once recorded, so an overpayment here was permanent.
+- Two inventory barcode routes (manual set, generate) didn't handle the same
+  duplicate-barcode race window already guarded against elsewhere in the app —
+  a concurrent collision surfaced a generic error page instead of the intended
+  friendly "already in use" message.
+- Login now takes the same amount of time whether or not the submitted username
+  exists, closing a timing side-channel that could be used to enumerate valid
+  usernames.
+
 ## [1.4.5] - 2026-08-22
 
 ### Fixed

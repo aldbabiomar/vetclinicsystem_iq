@@ -780,7 +780,13 @@ def login():
                   f"(around {unlock_at.strftime('%H:%M')}).", "error")
             return render_template("login.html", lockout_unlock_at=unlock_at.isoformat(timespec="seconds"))
         row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
-        ok = row and row["active"] and auth.verify_password(row["password_hash"], password)
+        # verify_password() runs unconditionally, even for a username that
+        # doesn't exist — against a dummy hash in that case (see its own
+        # comment in auth.py) — so a nonexistent/disabled username doesn't
+        # respond measurably faster than a real one and leak which
+        # usernames exist via response timing.
+        password_ok = auth.verify_password(row["password_hash"] if row else auth._DUMMY_PASSWORD_HASH, password)
+        ok = row and row["active"] and password_ok
         auth.log_login(db, row["id"] if row else None, username, bool(ok))
         if not ok:
             flash("Incorrect username or password, or account is disabled.", "error")
@@ -1186,7 +1192,7 @@ def dashboard():
         import backup as backup_mod
         backup_alert = logic.backup_alert_message(backup_mod.last_backup(db))
     return render_template("dashboard.html", snap=snap, lan_address=lan_address(), missed=missed,
-                            opex_due=opex_due, backup_alert=backup_alert,
+                            is_overseer=is_overseer, opex_due=opex_due, backup_alert=backup_alert,
                             missed_page=missed_page, missed_total_pages=page_count(missed_total),
                             missed_total=missed_total)
 
@@ -2630,7 +2636,19 @@ def inventory_catalog_barcode_manual(item_id):
         if dupe:
             return jsonify({"error": f'That barcode is already used by "{dupe["name"]}".'}), 400
 
-    db.execute("UPDATE inventory_list SET barcode=?, barcode_source='manual' WHERE id=?", (raw, item_id))
+    # The check above is a friendly fast-path, not the real guarantee — two
+    # concurrent requests setting the same barcode on two different items
+    # could both pass it before either UPDATE lands; inventory_list.barcode
+    # is DB-UNIQUE, so the loser raises instead of corrupting anything.
+    # Caught here (same pattern as appointment_new()'s slot race) so the
+    # loser gets this endpoint's own friendly JSON error instead of the
+    # generic error page — which callers here can't parse, since this
+    # route is always called via fetch().then(res => res.json()).
+    try:
+        db.execute("UPDATE inventory_list SET barcode=?, barcode_source='manual' WHERE id=?", (raw, item_id))
+    except dbmod.IntegrityError:
+        db.rollback()
+        return jsonify({"error": "That barcode was just claimed by another item — try again."}), 400
     auth.log_change(db, "inventory_list", item_id, "update", {"barcode": (item["barcode"], raw)})
     db.commit()
     return jsonify({"ok": True, "barcode": raw, "source": "manual"})
@@ -2657,7 +2675,16 @@ def inventory_catalog_barcode_generate(item_id):
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 500
 
-    db.execute("UPDATE inventory_list SET barcode=?, barcode_source='generated' WHERE id=?", (code, item_id))
+    # Same TOCTOU race as inventory_catalog_barcode_manual() above — two
+    # concurrent "Generate" clicks racing into the same candidate code
+    # (low but non-zero probability) would otherwise surface as the
+    # generic error page instead of a JSON error this fetch() caller can
+    # parse.
+    try:
+        db.execute("UPDATE inventory_list SET barcode=?, barcode_source='generated' WHERE id=?", (code, item_id))
+    except dbmod.IntegrityError:
+        db.rollback()
+        return jsonify({"error": "That code was just claimed by another item — try again."}), 400
     auth.log_change(db, "inventory_list", item_id, "update", {"barcode": (None, code)})
     db.commit()
     return jsonify({"ok": True, "barcode": code, "source": "generated",
@@ -3679,6 +3706,9 @@ def boarding_new():
     except BadNumber:
         flash("Price per Day and Total must be valid numbers.", "error")
         return redirect(url_for("boarding_page"))
+    if has_negative(price_per_day, total):
+        flash("Price per Day and Total can't be negative.", "error")
+        return redirect(url_for("boarding_page"))
     try:
         entry_date = clean_date(f.get("entry_date"), field="entry_date") or date.today().isoformat()
         dismissal_date = clean_date(f.get("dismissal_date"), field="dismissal_date")
@@ -3724,6 +3754,9 @@ def boarding_edit(boarding_id):
         total = parse_money(f.get("total"))
     except BadNumber:
         flash("Price per Day and Total must be valid numbers.", "error")
+        return redirect(url_for("boarding_page"))
+    if has_negative(price_per_day, total):
+        flash("Price per Day and Total can't be negative.", "error")
         return redirect(url_for("boarding_page"))
     try:
         entry_date = clean_date(f.get("entry_date"), field="entry_date") or old["entry_date"]
@@ -3808,6 +3841,9 @@ def boarding_dismiss(boarding_id):
 @auth.permission_required("manage_boarding")
 def boarding_incident(boarding_id):
     db = get_db()
+    if not db.execute("SELECT 1 FROM boarding_sessions WHERE id=?", (boarding_id,)).fetchone():
+        flash("Boarding session not found.", "error")
+        return redirect(url_for("boarding_page"))
     f = request.form
     issue = (f.get("issue") or "").strip()
     if not issue:
@@ -3831,6 +3867,15 @@ def boarding_incident(boarding_id):
 @auth.permission_required("manage_boarding")
 def boarding_payment(boarding_id):
     db = get_db()
+    # Locked before computing the balance, same reasoning as
+    # distributor_payment_new()/consignment_settlement_new() — there's no
+    # delete/edit route for a payment once recorded (unlike a distributor
+    # bill payment), so an overpayment here can never be undone, only
+    # journaled around. Worth the same guard even more than most.
+    session_row = db.execute("SELECT id FROM boarding_sessions WHERE id=? FOR UPDATE", (boarding_id,)).fetchone()
+    if not session_row:
+        flash("Boarding session not found.", "error")
+        return redirect(url_for("boarding_page"))
     try:
         amount = parse_money(request.form.get("amount")) or 0
     except BadNumber:
@@ -3838,6 +3883,10 @@ def boarding_payment(boarding_id):
         return redirect(url_for("boarding_page"))
     if amount <= 0:
         flash("Payment amount must be greater than 0.", "error")
+        return redirect(url_for("boarding_page"))
+    balance = logic.boarding_billing_summary(db, boarding_id)["balance"]
+    if amount > balance + 1e-9:
+        flash(f"That's more than the remaining balance of {logic.fmt_money(balance)} IQD on this stay.", "error")
         return redirect(url_for("boarding_page"))
     cur = db.execute(
         "INSERT INTO payments (boarding_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?) RETURNING id",
@@ -4428,6 +4477,22 @@ def appointment_new():
         flash("Appointment type must be one of: " + ", ".join(APPOINTMENT_TYPES) + ".", "error")
         return redirect(url_for("appointments_page", day=appt_date))
     resource_id = f.get("resource_id") or None
+    if resource_type == "grooming":
+        # Grooming has no per-resource distinction — every grooming booking
+        # shares one column on the grid, keyed as (slot_label, "grooming",
+        # NULL) by day_grid()/slot_conflict(). A tampered request smuggling
+        # a non-null resource_id here would create a row neither of those
+        # ever looks at — invisible on the grid, and not caught by
+        # orphaned_appointments() either (its stale_vet check only runs for
+        # resource_type=='vet') — so this is the only slot type where the
+        # value has to be forced rather than merely validated.
+        resource_id = None
+    elif not resource_id or not any(v["id"] == resource_id for v in logic.vet_users(db)):
+        flash("Pick a valid, active vet for this appointment.", "error")
+        return redirect(url_for("appointments_page", day=appt_date))
+    if not any(s["label"] == slot_label for s in logic.generate_slots(db)):
+        flash("That's not a valid time slot — the schedule may have changed. Reload and try again.", "error")
+        return redirect(url_for("appointments_page", day=appt_date))
 
     if logic.slot_conflict(db, appt_date, slot_label, resource_type, resource_id):
         flash("That slot is already booked for this vet/groomer.", "error")

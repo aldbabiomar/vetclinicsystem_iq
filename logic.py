@@ -1722,12 +1722,16 @@ def patient_outpatient_visits(db, patient_id, cases=None, order="DESC"):
 def patient_history(db, patient_id):
     cases = patient_inpatient_cases(db, patient_id, order="DESC")
     visits = patient_outpatient_visits(db, patient_id, cases=cases, order="DESC")
+    boarding = boarding_sessions_for_patient(db, patient_id)
     events = []
     for v in visits:
         events.append({"kind": "Visit", "date": v["date"], "record": dict(v), "summary": v["complaint"] or v["visit_type"]})
     for c in cases:
         events.append({"kind": "Inpatient stay", "date": c["admission_date"], "record": dict(c),
                         "summary": c["complaint"] or "Inpatient stay"})
+    for b in boarding:
+        events.append({"kind": "Boarding", "date": b["entry_date"], "record": dict(b),
+                        "summary": f"Boarding — {b['room']}" if b["room"] else "Boarding stay"})
     events.sort(key=lambda e: e["date"] or date.min, reverse=True)
     return events
 

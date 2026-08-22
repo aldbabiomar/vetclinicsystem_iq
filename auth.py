@@ -87,6 +87,18 @@ def verify_password(hash_, raw):
     return check_password_hash(hash_, raw)
 
 
+# A real hash of an unguessable value, computed once at import time —
+# login() checks the submitted password against this whenever the
+# username doesn't exist (or the account is disabled), instead of
+# short-circuiting straight to "no match". check_password_hash() is
+# deliberately slow (scrypt/pbkdf2); skipping it for a nonexistent
+# username makes that request return measurably faster than one for a
+# real, active username, which is a timing side-channel an attacker can
+# use to enumerate valid usernames one request at a time. Comparing
+# against this either way keeps the two cases' timing the same.
+_DUMMY_PASSWORD_HASH = generate_password_hash(uuid.uuid4().hex)
+
+
 def new_user_id():
     return "U" + uuid.uuid4().hex[:8].upper()
 

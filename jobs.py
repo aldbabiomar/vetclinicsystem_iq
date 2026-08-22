@@ -95,11 +95,19 @@ def start(step_labels, fn):
 
 
 def status(job_id):
-    """Returns a shallow-copied snapshot (safe to read after the lock is
-    released) or None if the job doesn't exist / has been pruned."""
+    """Returns a snapshot (safe to read after the lock is released) or None
+    if the job doesn't exist / has been pruned. `steps` is copied too, not
+    just the outer dict — update() mutates that list in place under the
+    lock, so a plain dict(state) would still share the same list object
+    and could show a step's label changing mid-read after the lock is
+    released."""
     with _lock:
         state = _jobs.get(job_id)
-        return dict(state) if state is not None else None
+        if state is None:
+            return None
+        snapshot = dict(state)
+        snapshot["steps"] = list(state["steps"])
+        return snapshot
 
 
 def take_result(job_id):
