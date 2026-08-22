@@ -349,9 +349,11 @@ def clean_date(v, field="date"):
 # Each deployment of this app serves exactly one clinic in one country, so a
 # small self-contained normalizer (rather than pulling in a general-purpose
 # library like `phonenumbers`) is simpler and has no extra dependency to
-# install. Differs per clinic — this is the ONE line that changes between
-# Vetzone/ChamPet (Iraq) and Dogtopia (Jordan).
+# install. Differs per clinic — these are the two lines that change between
+# Vetzone/ChamPet (Iraq, 10-digit local mobile numbers) and Dogtopia
+# (Jordan, whatever the equivalent is there).
 PHONE_COUNTRY_CODE = "964"
+PHONE_LOCAL_LENGTH = 10  # digits after the country code, for a number with no explicit +/00 prefix
 
 
 class BadPhone(ValueError):
@@ -368,6 +370,20 @@ def normalize_phone(raw):
     trunk 0 (e.g. "07701234567"), a number already carrying the country
     code (with or without a leading + or 00), or raises BadPhone if what
     was typed doesn't resemble a real phone number at all.
+
+    A number with no explicit +/00 prefix is ambiguous — there's no way to
+    tell "a local number, missing its usual leading 0" from "a foreign
+    number, typed without its country code" from the digits alone — so
+    that case is held to a strict PHONE_LOCAL_LENGTH-digit count (a real
+    local mobile number's actual length) rather than just "looks like
+    *some* valid-length phone number." Without this, an implausibly short
+    entry (a typo, a truncated paste) or a foreign number missing its
+    country code both silently normalize into *something* that passes a
+    generic E.164 length check, just not the number anyone actually meant
+    — and it's stored with no error, discovered only when a WhatsApp
+    message to it fails later. A number given WITH an explicit +/00 is
+    unambiguous (the owner is intentionally recording a foreign contact
+    number), so that case only needs the general E.164 sanity check.
     """
     if raw is None or not str(raw).strip():
         return None
@@ -377,16 +393,21 @@ def normalize_phone(raw):
         raise BadPhone(raw)
     if raw.startswith("+"):
         candidate = "+" + digits
+        if re.fullmatch(r"\+[1-9]\d{7,14}", candidate):
+            return candidate
     elif digits.startswith("00"):
         candidate = "+" + digits[2:]
-    elif digits.startswith("0"):
-        candidate = "+" + PHONE_COUNTRY_CODE + digits[1:]
-    elif digits.startswith(PHONE_COUNTRY_CODE):
-        candidate = "+" + digits
+        if re.fullmatch(r"\+[1-9]\d{7,14}", candidate):
+            return candidate
     else:
-        candidate = "+" + PHONE_COUNTRY_CODE + digits
-    if re.fullmatch(r"\+[1-9]\d{7,14}", candidate):
-        return candidate
+        if digits.startswith("0"):
+            local = digits[1:]
+        elif digits.startswith(PHONE_COUNTRY_CODE) and len(digits) == len(PHONE_COUNTRY_CODE) + PHONE_LOCAL_LENGTH:
+            local = digits[len(PHONE_COUNTRY_CODE):]
+        else:
+            local = digits
+        if len(local) == PHONE_LOCAL_LENGTH:
+            return "+" + PHONE_COUNTRY_CODE + local
     raise BadPhone(raw)
 
 
@@ -2190,12 +2211,26 @@ def price_list_new():
     if f.get("category") not in PRICE_CATEGORIES:
         flash("Category must be one of: " + ", ".join(PRICE_CATEGORIES) + ".", "error")
         return redirect(url_for("price_list"))
+    linked_item_id = f.get("linked_item_id") or None
+    if linked_item_id:
+        existing_link = db.execute(
+            "SELECT id, name FROM price_list WHERE linked_item_id=? AND active=true", (linked_item_id,)
+        ).fetchone()
+        # Two active rows linking to the same inventory item makes POS
+        # pricing nondeterministic — item_sale_price() picks whichever one
+        # a plain LIMIT 1 happens to return, with no ordering guarantee,
+        # so the same product could ring up at two different prices with
+        # no error or warning telling staff the catalog is inconsistent.
+        if existing_link:
+            flash(f"That inventory item is already linked to {existing_link['id']} ({existing_link['name']}) — "
+                  f"an item can only be linked from one active Price List row at a time.", "error")
+            return redirect(url_for("price_list"))
     pid = dbmod.next_id(db, "P")
     can_discount = f.get("can_discount") == "on"
     db.execute(
         "INSERT INTO price_list (id,name,category,cost_price,sale_price,notes,active,linked_item_id,can_discount) VALUES (?,?,?,?,?,?,true,?,?)",
         (pid, f["name"], f["category"], cost_price, sale_price,
-         f.get("notes"), f.get("linked_item_id") or None, can_discount),
+         f.get("notes"), linked_item_id, can_discount),
     )
     auth.log_change(db, "price_list", pid, "create")
     db.commit()
@@ -2226,6 +2261,7 @@ def price_list_bulk_edit():
     items = payload.get("items") or []
     saved, errors = [], {}
     any_price_changed = False
+    claimed_in_batch = {}
     for item in items:
         item_id = str(item.get("id", ""))
         fields = item.get("fields") or {}
@@ -2242,9 +2278,26 @@ def price_list_bulk_edit():
         if not old:
             errors[item_id] = "Item not found."
             continue
+        new_linked_item_id = (fields.get("linked_item_id") or None) if "linked_item_id" in fields else old["linked_item_id"]
+        if new_linked_item_id:
+            # Two active rows linking to the same inventory item makes POS
+            # pricing nondeterministic (item_sale_price() has no ordering
+            # guarantee among them) — checked against both the database
+            # (another row, unrelated to this batch) and what this same
+            # batch has already claimed (two rows in one bulk save both
+            # trying to link the same item).
+            dup = db.execute(
+                "SELECT id FROM price_list WHERE linked_item_id=? AND active=true AND id != ?",
+                (new_linked_item_id, item_id),
+            ).fetchone()
+            dup_id = dup["id"] if dup else claimed_in_batch.get(new_linked_item_id)
+            if dup_id and dup_id != item_id:
+                errors[item_id] = f"That inventory item is already linked to {dup_id} — an item can only be linked from one active row at a time."
+                continue
+            claimed_in_batch[new_linked_item_id] = item_id
         new_vals = {"name": fields.get("name", ""), "category": fields.get("category", ""),
                     "cost_price": cost_price, "sale_price": sale_price, "notes": fields.get("notes"),
-                    "linked_item_id": (fields.get("linked_item_id") or None) if "linked_item_id" in fields else old["linked_item_id"],
+                    "linked_item_id": new_linked_item_id,
                     "can_discount": fields.get("can_discount") == "on"}
         changes = auth.diff_dict(old, new_vals)
         db.execute(
@@ -2279,9 +2332,22 @@ def price_list_edit(item_id):
         flash("Category must be one of: " + ", ".join(PRICE_CATEGORIES) + ".", "error")
         return redirect(url_for("price_list"))
     old = db.execute("SELECT * FROM price_list WHERE id=?", (item_id,)).fetchone()
+    if not old:
+        flash("Price list item not found.", "error")
+        return redirect(url_for("price_list"))
+    new_linked_item_id = (f.get("linked_item_id") or None) if "linked_item_id" in f else old["linked_item_id"]
+    if new_linked_item_id and new_linked_item_id != old["linked_item_id"]:
+        dup = db.execute(
+            "SELECT id, name FROM price_list WHERE linked_item_id=? AND active=true AND id != ?",
+            (new_linked_item_id, item_id),
+        ).fetchone()
+        if dup:
+            flash(f"That inventory item is already linked to {dup['id']} ({dup['name']}) — "
+                  f"an item can only be linked from one active Price List row at a time.", "error")
+            return redirect(url_for("price_list"))
     new_vals = {"name": f["name"], "category": f["category"], "cost_price": cost_price,
                 "sale_price": sale_price, "notes": f.get("notes"),
-                "linked_item_id": (f.get("linked_item_id") or None) if "linked_item_id" in f else old["linked_item_id"],
+                "linked_item_id": new_linked_item_id,
                 "can_discount": f.get("can_discount") == "on"}
     changes = auth.diff_dict(old, new_vals)
     db.execute("UPDATE price_list SET name=?, category=?, cost_price=?, sale_price=?, notes=?, linked_item_id=?, can_discount=? WHERE id=?",
@@ -2839,7 +2905,13 @@ def distributor_bill_delete(dist_id, bill_id):
 def distributor_payment_new(dist_id, bill_id):
     db = get_db()
     f = request.form
-    bill = db.execute("SELECT * FROM distributor_bills WHERE id=? AND distributor_id=?", (bill_id, dist_id)).fetchone()
+    # Locked before computing the balance, same reasoning as
+    # pos_checkout()'s cart-item locking: without this, two payments each
+    # individually within the balance shown at page-load could both pass
+    # the check below and both insert, together overpaying the bill.
+    bill = db.execute(
+        "SELECT * FROM distributor_bills WHERE id=? AND distributor_id=? FOR UPDATE", (bill_id, dist_id)
+    ).fetchone()
     if not bill:
         flash("Bill not found.", "error")
         return redirect(url_for("distributor_detail", dist_id=dist_id))
@@ -2850,6 +2922,19 @@ def distributor_payment_new(dist_id, bill_id):
         return redirect(url_for("distributor_detail", dist_id=dist_id))
     if amount <= 0:
         flash("Payment amount must be greater than zero.", "error")
+        return redirect(url_for("distributor_detail", dist_id=dist_id))
+    paid_so_far = db.execute(
+        "SELECT COALESCE(SUM(amount),0) s FROM distributor_bill_payments WHERE bill_id=?", (bill_id,)
+    ).fetchone()["s"]
+    balance = bill["total_amount"] - paid_so_far
+    # The HTML max= on the amount field already stops this in the normal
+    # UI, but that's client-side only — a crafted request or a stale page
+    # (someone else already paid part of it) can still submit more than
+    # what's actually left owed, which would flip the bill to a "Paid"
+    # badge next to a negative balance with nothing indicating an
+    # overpayment/credit happened.
+    if amount > balance + 1e-9:
+        flash(f"That's more than the remaining balance of {logic.fmt_money(balance)} IQD on this bill.", "error")
         return redirect(url_for("distributor_detail", dist_id=dist_id))
     try:
         payment_date = clean_date(f.get("payment_date"), field="payment_date") or date.today().isoformat()
@@ -3237,7 +3322,17 @@ def consignment_settlements_page(distributor_id):
 @auth.permission_required("manage_consignment_settlements")
 def consignment_settlement_new(distributor_id):
     db = get_db()
-    distributor = db.execute("SELECT * FROM distributors WHERE id=?", (distributor_id,)).fetchone()
+    # Locked before computing the balance — consignment_balance() reads
+    # whatever settlement was most recently committed as its starting
+    # point, so without this, two near-simultaneous submissions (double-
+    # click, a retried request) could both read the same "last
+    # settlement" before either commits, both compute a balance covering
+    # the identical sales window, and both insert as separate settlement
+    # rows — crediting/paying out the same batch of sales twice. The lock
+    # is purely a mutex here (nothing about the distributor row itself
+    # changes); same technique record_consignment_shrinkage() and
+    # record_consignment_return() already use on inventory_list rows.
+    distributor = db.execute("SELECT * FROM distributors WHERE id=? FOR UPDATE", (distributor_id,)).fetchone()
     if not distributor:
         flash("Distributor not found.", "error")
         return redirect(url_for("consignment_overview"))
@@ -3461,11 +3556,17 @@ def audit_session_confirm(session_id):
             "SELECT item_id, stock_counted FROM audit_session_lines WHERE session_id=? AND stock_counted IS NOT NULL",
             (session_id,),
         ).fetchall()
+        # inventory_status_by_id() re-runs the whole catalog-wide status
+        # computation and linear-scans for one item — fine called once,
+        # not once per consignment item in this loop (O(items counted x
+        # full catalog) round-trips on every Confirm click otherwise).
+        # Computed once up front and looked up by item_id instead.
+        status_by_item = {s["item_id"]: s for s in logic.inventory_status(db)}
         for line in counted_lines:
             item = consignment_items.get(line["item_id"])
             if not item:
                 continue
-            status = logic.inventory_status_by_id(db, line["item_id"])
+            status = status_by_item.get(line["item_id"])
             expected = (status["current_stock"] if status else 0) or 0
             counted = line["stock_counted"]
             if counted < expected:
@@ -3649,6 +3750,15 @@ def boarding_dismiss(boarding_id):
     db.execute("UPDATE boarding_sessions SET dismissed=true, dismissal_date=?, total=? WHERE id=?",
                (dismissal_date, final_total, boarding_id))
     logic.refresh_boarding_total(db, boarding_id)
+    # Boarding revenue is attributed to entry_date's month (see
+    # _revenue_and_cogs_by_month), and that month's P&L was already
+    # cached in monthly_financial_summary back when this session was
+    # created — using whatever `total` was at that moment (usually a
+    # 1-night placeholder, per the comment above). Locking in the real
+    # final total here without this would leave that month's cached
+    # revenue permanently understated until something unrelated happened
+    # to touch the same month's cache.
+    logic.recompute_month_summary(db, logic.month_key(row["entry_date"]))
     auth.log_change(db, "boarding_sessions", str(boarding_id), "update", {"dismissed": (False, True)})
     db.commit()
     flash("Marked as picked up.", "success")

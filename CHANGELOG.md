@@ -3,6 +3,41 @@
 All notable changes to Vetzone IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.4.4] - 2026-08-22
+
+### Fixed
+- **Inventory Status was double-counting same-day sales against the count that already
+  included them.** It compared transactions to the *date* of the last audit, not the
+  *moment* it was confirmed — so a completely normal same-day workflow (sell all
+  morning, do the physical shelf count in the afternoon) would subtract the morning's
+  sales a second time on top of a stock_counted figure that already reflected them.
+  This had been silently wrong since the audit feature shipped, cascading into false
+  LOW STOCK flags, wrong Ordering Sheet priorities, wrongly-blocked consignment
+  shrinkage/return entries, and false shortfall warnings on the next audit's confirm.
+  Now compares against the audit's actual confirmation timestamp.
+- Picking up a boarding stay (dismiss) locked in the real final total but never told
+  the monthly P&L cache about it — that month's revenue stayed stuck at whatever
+  placeholder total existed when the stay began, permanently understating it until
+  something unrelated happened to touch the same month.
+- Confirming an audit session with consignment items re-ran the full inventory status
+  computation once per counted item instead of once total — a Confirm click on a
+  large audit could mean the catalog-wide status query running dozens of times over.
+- A distributor bill payment could be entered for more than the bill's remaining
+  balance, and two near-simultaneous submissions (double-click, a retried request)
+  could both record a payment before either was accounted for by the other.
+- Two near-simultaneous consignment settlement submissions could both compute a
+  balance against the same "last settlement so far" and both post — settling
+  (and appearing to pay out) the same batch of sales twice.
+- A Price List row could be linked to an inventory item that was already linked from
+  another active row, silently making pricing nondeterministic for that item
+  depending on which row happened to be read. Blocked on create, edit, and bulk edit
+  (bulk edit also checks for two rows in the same batch claiming the same item).
+  Editing a Price List row that no longer existed also crashed instead of showing
+  a clean error.
+- Phone number entry accepted implausibly short input and silently mis-normalized a
+  foreign number typed without its country code into a fabricated local number,
+  instead of rejecting either as invalid.
+
 ## [1.4.3] - 2026-08-22
 
 ### Added
