@@ -25,12 +25,19 @@ IntegrityError = psycopg.IntegrityError
 # (dbmod.PoolTimeout) and show a friendly "server is busy" message instead
 # of a generic 500.
 PoolTimeout = PoolTimeout
+# Re-exported so app.py can catch "a numeric value didn't fit its column"
+# specifically — an absurdly large id/quantity/etc. (a crafted URL, a huge
+# ?page=, ...) raises this instead of a generic DB error; caught globally
+# for a clean message instead of a raw 500 (see app.py's errorhandler).
+NumericValueOutOfRange = psycopg.errors.NumericValueOutOfRange
 
-# Matches a bare '?' placeholder, but not '?' inside a quoted string literal.
-# The app never puts literal '?' characters inside string literals in its
-# SQL (verified), so a plain replace is safe and fast; this regex is kept
-# only as a defensive extra so a stray '?' inside a quoted literal (e.g. a
-# future LIKE pattern) is not mistranslated.
+# Matches every '?' unconditionally — NOT quote-aware, despite how this
+# might read at a glance; it does not distinguish a placeholder from a
+# literal '?' inside a quoted string. Safe today only because the app
+# never puts a literal '?' character inside any SQL string literal
+# (verified) — a future LIKE pattern or similar containing one would be
+# silently mistranslated and desync the parameter list. If that's ever
+# needed, make this quote-aware first (e.g. skip matches inside '...').
 _PLACEHOLDER_RE = re.compile(r"\?")
 
 

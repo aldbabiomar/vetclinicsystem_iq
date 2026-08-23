@@ -200,6 +200,11 @@ def _run_backup_locked(db, dest_dir=None, retention=None, triggered_by=None, on_
     step(1)  # Dumping database
     try:
         _run_pg_dump(out_path)
+        # Dump files hold full patient/owner PHI and inherit the process's
+        # default umask otherwise (potentially group/world-readable) —
+        # Settings explicitly supports pointing the backup folder at a
+        # synced cloud folder, so this isn't just theoretical.
+        os.chmod(out_path, 0o600)
         size = os.path.getsize(out_path)
         _finish_log(db, log_id, "success", out_path, size, None)
         step(2)  # Applying retention policy

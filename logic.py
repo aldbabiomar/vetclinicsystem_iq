@@ -161,16 +161,8 @@ def confirmed_audit_rows_by_item(db, item_id=None):
     return out
 
 
-def _txn_qty_since(db, item_id, since_date):
-    row = db.execute(
-        "SELECT COALESCE(SUM(change_qty),0) s FROM inventory_transactions WHERE item_id=? AND timestamp > ?",
-        (item_id, since_date),
-    ).fetchone()
-    return row["s"] or 0
-
-
 def _txn_qty_since_batch(db, cutoffs):
-    """Same as _txn_qty_since(), but for every item at once — cutoffs is
+    """For every item at once — cutoffs is
     {item_id: cutoff_timestamp}, each item compared against its *own*
     cutoff (they're not all the same, since each item's latest confirmed
     audit happened at a different time) in a single query instead of one
@@ -349,10 +341,6 @@ def ordering_sheet(db):
 # ---------------------------------------------------------------------------
 # Billing (Automatic line-items OR Manual lump sum) + discount + payment status
 # ---------------------------------------------------------------------------
-def price_lookup(db):
-    return {r["id"]: dict(r) for r in db.execute("SELECT * FROM price_list").fetchall()}
-
-
 def retail_consistency_flags(db):
     """
     Cross-checks the Retail category between Inventory Catalog and Price
@@ -438,8 +426,12 @@ def compute_bill_totals(subtotal, discount_percent, paid):
     total = money.round_to_denomination(raw_total)
     # Never let rounding present a genuinely non-zero bill as "free" — but
     # a 100% discount is an intentional waiver, not a rounding accident,
-    # so it's exempt from this floor.
-    if 0 < raw_total < 125 and discount_percent < 100:
+    # so it's exempt from this floor. <= 125, not < 125: round_to_denomination()
+    # itself now correctly rounds exactly-125 up to 250 (true half-up), so
+    # this only ever actually fires below 125 in practice — the <= is just
+    # not leaving a gap at the boundary for this guard to depend on
+    # round_to_denomination's internals to stay correct.
+    if 0 < raw_total <= 125 and discount_percent < 100:
         total = money.SMALLEST_NOTE
     paid = round(paid or 0, 2)
     balance = money.round_to_denomination(total - paid)
@@ -1689,6 +1681,12 @@ def search_patients(db, term):
 
 
 def patient_inpatient_cases(db, patient_id, order="DESC"):
+    # Every current caller passes a hardcoded "ASC"/"DESC" literal, never
+    # a request parameter — this normalizes anyway rather than trusting
+    # that stays true for whoever calls this next, since {order} below is
+    # string-interpolated straight into the query (direction can't be
+    # parameterized like a value can).
+    order = "ASC" if str(order).upper() == "ASC" else "DESC"
     return db.execute(
         f"SELECT * FROM inpatient_cases WHERE patient_id=? ORDER BY admission_date {order}",
         (patient_id,),
@@ -1713,6 +1711,7 @@ def patient_outpatient_visits(db, patient_id, cases=None, order="DESC"):
     if cases is None:
         cases = patient_inpatient_cases(db, patient_id, order=order)
     admission_dates = {c["admission_date"] for c in cases}
+    order = "ASC" if str(order).upper() == "ASC" else "DESC"
     visits = db.execute(
         f"SELECT * FROM visits WHERE patient_id=? ORDER BY date {order}", (patient_id,)
     ).fetchall()

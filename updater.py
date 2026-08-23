@@ -152,7 +152,17 @@ def _download_and_extract(tarball_url, dest_path):
     resp.raise_for_status()
     with tempfile.TemporaryDirectory() as tmp:
         with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tf:
-            tf.extractall(tmp)  # nosec - trusted source: our own tagged GitHub release
+            # filter="data" (Python 3.12+) strips absolute paths, ../
+            # traversal, device files, and permission bits that could
+            # affect files outside dest_path — a second layer of defense
+            # in case the trusted source (this repo's own tagged GitHub
+            # release) were ever compromised. Falls back to plain
+            # extractall() on an older interpreter, since the app doesn't
+            # pin a minimum Python version.
+            try:
+                tf.extractall(tmp, filter="data")
+            except TypeError:
+                tf.extractall(tmp)  # nosec - Python <3.12, no filter= support
         entries = [e for e in os.listdir(tmp) if os.path.isdir(os.path.join(tmp, e))]
         if len(entries) != 1:
             raise RuntimeError(f"Unexpected tarball layout ({len(entries)} top-level entries).")

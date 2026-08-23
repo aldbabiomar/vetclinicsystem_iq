@@ -49,10 +49,16 @@ VERSION = open(_version_path).read().strip() if os.path.exists(_version_path) el
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY")
-if not app.secret_key:
+# The unset check alone doesn't catch someone hand-copying .env.example to
+# .env instead of running setup.py (which is what actually replaces this
+# placeholder with a real random key) — that would otherwise boot fine
+# with a well-known, publicly-visible-in-source-control value signing
+# every session cookie and CSRF token.
+if not app.secret_key or app.secret_key == "change-me":
     raise SystemExit(
-        "SECRET_KEY is not set. Copy .env.example to .env (setup.py does this "
-        "for you) before starting the app."
+        "SECRET_KEY is not set (or still the placeholder value). Copy "
+        ".env.example to .env (setup.py does this for you, with a real "
+        "random key) before starting the app."
     )
 csrf = CSRFProtect(app)
 
@@ -118,6 +124,23 @@ def _enforce_network_allowlist():
     return None
 
 
+@app.before_request
+def _reject_null_bytes():
+    """A literal null byte (%00) in a path segment, query value, or form
+    field reaches psycopg unfiltered and Postgres rejects it outright —
+    surfacing as a raw, unhandled exception instead of a clean response.
+    Checked once, globally, rather than at every individual input site.
+    request.form (not request.files) only — file content is binary and
+    null bytes there are normal, not a sign of anything wrong. Werkzeug
+    already splits the two apart for both regular and multipart POSTs, so
+    this never touches actual uploaded file bytes."""
+    if "\x00" in request.path or "\x00" in request.query_string.decode("utf-8", "replace"):
+        return ("Bad Request", 400)
+    if request.method == "POST" and any("\x00" in v for v in request.form.values()):
+        return ("Bad Request", 400)
+    return None
+
+
 # Simple in-memory per-IP rate limit on login attempts — independent of
 # (and in addition to) auth.py's existing per-USERNAME lockout, which
 # doesn't slow down someone trying many different usernames from one
@@ -163,6 +186,19 @@ def add_security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "same-origin"
+    # 'unsafe-inline' for script/style, not a stricter nonce-based policy —
+    # every template here is inline-script-heavy, and this isn't the layer
+    # that stops an inline-script injection anyway (Jinja autoescaping
+    # already does that; verified clean repo-wide). What this actually
+    # buys: nothing on the page can load a script, stylesheet, image, or
+    # make a fetch/XHR/WebSocket connection to any origin but this app's
+    # own — closing off exfiltration and third-party-resource risk even
+    # if some future template change introduced one.
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'; frame-ancestors 'none'"
+    )
     return resp
 
 
@@ -173,7 +209,16 @@ def add_security_headers(resp):
 # A dedicated file+logger, independent of the DB, so a crash caused by the
 # database itself being unreachable still gets captured.
 # ---------------------------------------------------------------------------
-ERROR_LOG_PATH = os.path.join(BASE_DIR, "logs", "errors.log")
+# Anchored to the persistent data dir (same _data_dir resolved at the top
+# of this file for .env), not BASE_DIR — BASE_DIR is this file's own
+# folder, which on the versioned-release layout is the CURRENT release
+# folder, replaced by an in-app update and later deleted by the old-
+# release prune. Logging there would silently start a fresh, empty log
+# file on every update and lose everything written before it. Falls back
+# to BASE_DIR when _data_dir isn't set (local dev, or an install that
+# never switched onto the versioned-release layout), unchanged from
+# before this option existed.
+ERROR_LOG_PATH = os.path.join(_data_dir, "logs", "errors.log") if _data_dir else os.path.join(BASE_DIR, "logs", "errors.log")
 os.makedirs(os.path.dirname(ERROR_LOG_PATH), exist_ok=True)
 
 error_logger = logging.getLogger("vetclinicsystemiq.errors")
@@ -466,12 +511,19 @@ def cached_dashboard_snapshot(db):
 PER_PAGE = 50
 
 
+MAX_PAGE = 100_000
+
+
 def get_page():
     try:
         p = int(request.args.get("page", 1))
     except (TypeError, ValueError):
         p = 1
-    return max(1, p)
+    # Upper-bounded too, not just >= 1 — an absurd ?page= value otherwise
+    # overflows Postgres's integer range once it reaches OFFSET, surfacing
+    # as an error instead of just showing the last real page. No realistic
+    # list in this app has anywhere near 100,000 pages.
+    return max(1, min(p, MAX_PAGE))
 
 
 def page_count(total, per_page=PER_PAGE):
@@ -567,7 +619,7 @@ app.jinja_env.globals["static_asset"] = static_asset
 # ---------------------------------------------------------------------------
 # Auth gate
 # ---------------------------------------------------------------------------
-OPEN_ENDPOINTS = {"login", "static", "favicon_ico", "health"}
+OPEN_ENDPOINTS = {"login", "logout", "static", "favicon_ico", "health"}
 
 
 @app.route("/favicon.ico")
@@ -597,6 +649,17 @@ def require_login():
     if not user:
         session.clear()
         return redirect(url_for("login"))
+    # A password change/reset stamps users.password_changed_at; comparing
+    # it against the value captured in the session at login time means a
+    # session established under the OLD password stops working on its
+    # very next request instead of staying valid for up to
+    # PERMANENT_SESSION_LIFETIME after the password was changed — matters
+    # most right when an admin resets a suspected-compromised account.
+    # None on both sides (an account whose password has never been
+    # changed since this column existed) is not a mismatch.
+    if session.get("password_changed_at") != user["password_changed_at"]:
+        session.clear()
+        return redirect(url_for("login", next=request.path))
     auth.refresh_session_permissions(db, user)
     if user["must_change_password"] and request.endpoint != "change_password":
         return redirect(url_for("change_password"))
@@ -699,6 +762,17 @@ def handle_bad_number(e):
 def handle_bad_phone(e):
     """Safety net for BadPhone — same idea as handle_bad_number() above."""
     flash("That phone number doesn't look valid. Please check it and try again.", "error")
+    return _fallback_redirect()
+
+
+@app.errorhandler(dbmod.NumericValueOutOfRange)
+def handle_numeric_out_of_range(e):
+    """An absurdly large integer reached a numeric database column — a
+    crafted `<int:...>` URL segment, a huge quantity/amount, an id nobody
+    would legitimately have — instead of a bad-but-plausible value
+    BadNumber's validation would have already caught client-side. Same
+    friendly-degrade pattern as BadNumber/BadPhone above."""
+    flash("That number is too large to be a valid value here.", "error")
     return _fallback_redirect()
 
 
@@ -820,8 +894,13 @@ def login():
         if not ok:
             flash("Incorrect username or password, or account is disabled.", "error")
             return render_template("login.html")
+        # Drops whatever pre-auth session state existed (e.g. an anonymous
+        # CSRF token) before establishing the authenticated one, rather
+        # than letting it carry across the login boundary.
+        session.clear()
         session["user_id"] = row["id"]
         session["username"] = row["full_name"]
+        session["password_changed_at"] = row["password_changed_at"]
         # Gives the session an actual server-enforced expiry (see
         # PERMANENT_SESSION_LIFETIME above) instead of relying solely on
         # the browser dropping the cookie on close — which doesn't happen
@@ -857,10 +936,15 @@ def change_password():
         elif new != confirm:
             flash("New password and confirmation don't match.", "error")
         else:
-            db.execute("UPDATE users SET password_hash=?, must_change_password=false WHERE id=?",
-                       (auth.hash_password(new), user["id"]))
+            changed_at = datetime.now().isoformat(timespec="seconds")
+            db.execute("UPDATE users SET password_hash=?, must_change_password=false, password_changed_at=? WHERE id=?",
+                       (auth.hash_password(new), changed_at, user["id"]))
             auth.log_change(db, "users", user["id"], "update", {"password": ("(hidden)", "(self-service change)")})
             db.commit()
+            # This session just legitimately caused the change — update its
+            # own copy of the stamp so require_login()'s mismatch check
+            # doesn't immediately log this same session back out.
+            session["password_changed_at"] = changed_at
             flash("Password updated.", "success")
             return redirect(url_for("dashboard"))
     return render_template("change_password.html", forced=forced)
@@ -1028,8 +1112,8 @@ def admin_user_reset_password(user_id):
     if not db.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
         flash("User not found.", "error")
         return redirect(url_for("admin_users"))
-    db.execute("UPDATE users SET password_hash=?, must_change_password=true WHERE id=?",
-               (auth.hash_password(new_pw), user_id))
+    db.execute("UPDATE users SET password_hash=?, must_change_password=true, password_changed_at=? WHERE id=?",
+               (auth.hash_password(new_pw), datetime.now().isoformat(timespec="seconds"), user_id))
     auth.log_change(db, "users", user_id, "update", {"password": ("(hidden)", "(reset by admin)")})
     db.commit()
     flash("Password reset. The user will be asked to set a new one on next login.", "success")
@@ -2040,6 +2124,14 @@ def visit_discount_save(visit_id):
 def visit_payment_add(visit_id):
     db = get_db()
     f = request.form
+    # Locked before computing the balance, same reasoning as
+    # distributor_payment_new()/boarding_payment() — without this, two
+    # near-simultaneous payments against the same visit could each read
+    # the same "remaining balance" before either commits, and both go
+    # through, together overpaying the bill.
+    if not db.execute("SELECT 1 FROM visits WHERE id=? FOR UPDATE", (visit_id,)).fetchone():
+        flash("Visit not found.", "error")
+        return redirect(url_for("visits_list"))
     try:
         amount = parse_money(f.get("amount"), required=True)
     except BadNumber:
@@ -2047,6 +2139,10 @@ def visit_payment_add(visit_id):
         return redirect(url_for("visit_detail", visit_id=visit_id))
     if amount <= 0:
         flash("Payment amount must be greater than 0.", "error")
+        return redirect(url_for("visit_detail", visit_id=visit_id))
+    balance = logic.visit_billing_summary(db, visit_id)["balance"]
+    if amount > balance + 1e-9:
+        flash(f"That's more than the remaining balance of {logic.fmt_money(balance)} IQD on this visit.", "error")
         return redirect(url_for("visit_detail", visit_id=visit_id))
     try:
         payment_date = clean_date(f.get("date"), field="date") or date.today().isoformat()
@@ -3444,6 +3540,9 @@ def consignment_settlement_new(distributor_id):
     if amount_paid < 0:
         flash("Amount Paid can't be negative.", "error")
         return redirect(url_for("consignment_settlements_page", distributor_id=distributor_id))
+    if amount_paid > balance["amount_owed"] + 1e-9:
+        flash(f"That's more than the {logic.fmt_money(balance['amount_owed'])} IQD owed for this period.", "error")
+        return redirect(url_for("consignment_settlements_page", distributor_id=distributor_id))
     amount_paid = money.round_to_denomination(amount_paid)
     cur = db.execute(
         "INSERT INTO consignment_settlements (distributor_id, period_start, period_end, amount_owed, amount_paid, "
@@ -4064,9 +4163,12 @@ def pos_checkout():
             flash("Cash Received must be a valid number.", "error")
             return redirect(url_for("pos_page"))
         if cash_received is not None:
+            if cash_received < total:
+                flash(f"Cash received ({logic.fmt_money(cash_received)} IQD) is less than the total "
+                      f"({logic.fmt_money(total)} IQD) — collect the full amount before completing the sale.", "error")
+                return redirect(url_for("pos_page"))
             # Floored to the nearest 250 IQD note — never hand back more
-            # cash than owed; any shortfall (or a cash_received below the
-            # total) is absorbed by the clinic rather than shown negative.
+            # cash than owed.
             change_given = max(money.round_to_denomination(cash_received - total, mode="down"), 0)
     now = datetime.now().isoformat(timespec="seconds")
     cur = db.execute(
@@ -4108,6 +4210,11 @@ def pos_history():
     db = get_db()
     page = get_page()
     date_filter = request.args.get("date", "").strip() or None
+    try:
+        logic.parse_date(date_filter)
+    except ValueError:
+        flash("That date wasn't valid — showing all dates instead.", "error")
+        date_filter = None
     where = " WHERE s.sale_date LIKE ?" if date_filter else ""
     params = [date_filter + "%"] if date_filter else []
     total = db.execute(f"SELECT COUNT(*) c FROM sales s{where}", params).fetchone()["c"]
@@ -4309,6 +4416,20 @@ def inpatient_contact_add(case_id):
 def inpatient_billing_add(case_id):
     db = get_db()
     price_ids = request.form.getlist("price_id")
+    # inpatient_discount_save() only checks non-discountable items against
+    # whatever's on the bill *at the moment a discount is applied* — same
+    # gap visit_billing_save() already closes on its own side. Without
+    # this, a discount applied while the bill only has discountable items
+    # would silently carry forward onto a non-discountable procedure
+    # added afterward, with nothing to stop it.
+    existing_case = db.execute("SELECT discount_percent FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
+    if existing_case and (existing_case["discount_percent"] or 0) > 0:
+        blocked = logic.non_discountable_line_names(db, price_ids)
+        if blocked:
+            flash(f"Can't add — this case has a {existing_case['discount_percent']:.0f}% discount applied, "
+                  f"but includes item(s) marked as not discountable: {', '.join(blocked)}. "
+                  "Remove the discount first, or leave these items off this bill.", "error")
+            return redirect(url_for("inpatient_detail", case_id=case_id))
     now = datetime.now().isoformat(timespec="seconds")
     added = 0
     had_bad_number = False
@@ -4410,6 +4531,11 @@ def inpatient_discount_save(case_id):
 def inpatient_payment_add(case_id):
     db = get_db()
     f = request.form
+    # Locked before computing the balance — same reasoning as
+    # visit_payment_add()/boarding_payment().
+    if not db.execute("SELECT 1 FROM inpatient_cases WHERE id=? FOR UPDATE", (case_id,)).fetchone():
+        flash("Inpatient case not found.", "error")
+        return redirect(url_for("inpatient_list"))
     try:
         amount = parse_money(f.get("amount"), required=True)
     except BadNumber:
@@ -4417,6 +4543,10 @@ def inpatient_payment_add(case_id):
         return redirect(url_for("inpatient_detail", case_id=case_id))
     if amount <= 0:
         flash("Payment amount must be greater than 0.", "error")
+        return redirect(url_for("inpatient_detail", case_id=case_id))
+    balance = logic.inpatient_billing_summary(db, case_id)["balance"]
+    if amount > balance + 1e-9:
+        flash(f"That's more than the remaining balance of {logic.fmt_money(balance)} IQD on this case.", "error")
         return redirect(url_for("inpatient_detail", case_id=case_id))
     try:
         payment_date = clean_date(f.get("date"), field="date") or date.today().isoformat()
@@ -4854,7 +4984,10 @@ def refund_retail_save():
         return redirect(url_for("refunds_page"))
 
     now = datetime.now().isoformat(timespec="seconds")
-    rounded_total = money.round_to_denomination(total)
+    # "down", not the default "nearest" — same reasoning as change-giving:
+    # a refund is money leaving the clinic, so rounding should never push
+    # it above what the refunded lines actually add up to.
+    rounded_total = money.round_to_denomination(total, mode="down")
     cur = db.execute(
         "INSERT INTO refunds (refund_type, refund_date, amount, restocked, sale_id, reason, refund_method, processed_by, created_at) "
         "VALUES ('retail',?,?,?,?,?,?,?,?) RETURNING id",
@@ -4909,18 +5042,49 @@ def refund_service_save():
         flash("Refund amount must be greater than 0.", "error")
         return redirect(url_for("refunds_page"))
 
-    if visit_id and not db.execute("SELECT 1 FROM visits WHERE id=?", (visit_id,)).fetchone():
-        flash(f"Visit {visit_id} not found.", "error")
-        return redirect(url_for("refunds_page"))
+    # Locked before computing what's refundable, same reasoning as every
+    # other cap-and-lock in this app — without this, two near-simultaneous
+    # service refunds against the same visit/case could each read the same
+    # "amount still refundable" before either commits, and both go
+    # through, together refunding more than was ever actually paid.
+    if visit_id:
+        if not db.execute("SELECT 1 FROM visits WHERE id=? FOR UPDATE", (visit_id,)).fetchone():
+            flash(f"Visit {visit_id} not found.", "error")
+            return redirect(url_for("refunds_page"))
 
     case_id = None
     if case_id_raw:
         if not case_id_raw.isdigit() or not db.execute(
-            "SELECT 1 FROM inpatient_cases WHERE id=?", (int(case_id_raw),)
+            "SELECT 1 FROM inpatient_cases WHERE id=? FOR UPDATE", (int(case_id_raw),)
         ).fetchone():
             flash(f"Inpatient case {case_id_raw} not found.", "error")
             return redirect(url_for("refunds_page"))
         case_id = int(case_id_raw)
+
+    # A service refund isn't required to link to a visit/case at all (a
+    # general refund for a reason unrelated to a specific record is a
+    # supported, intentional use of this form — see refunds.html, both
+    # fields are marked optional) — the cap below only applies when there's
+    # an actual entity to compute "amount paid" against; a free-floating
+    # refund is unbounded by design, same as before this fix.
+    if visit_id or case_id:
+        refundable = 0
+        if visit_id:
+            paid = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE visit_id=?", (visit_id,)).fetchone()["s"]
+            already_refunded = db.execute(
+                "SELECT COALESCE(SUM(amount),0) s FROM refunds WHERE visit_id=? AND refund_type='service'", (visit_id,)
+            ).fetchone()["s"]
+            refundable += (paid or 0) - (already_refunded or 0)
+        if case_id:
+            paid = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE inpatient_case_id=?", (case_id,)).fetchone()["s"]
+            already_refunded = db.execute(
+                "SELECT COALESCE(SUM(amount),0) s FROM refunds WHERE inpatient_case_id=? AND refund_type='service'", (case_id,)
+            ).fetchone()["s"]
+            refundable += (paid or 0) - (already_refunded or 0)
+        if amount > refundable + 1e-9:
+            flash(f"That's more than the {logic.fmt_money(max(refundable, 0))} IQD still refundable "
+                  f"against this record.", "error")
+            return redirect(url_for("refunds_page"))
 
     now = datetime.now().isoformat(timespec="seconds")
     rounded_amount = money.round_to_denomination(amount)
@@ -4983,6 +5147,14 @@ def cash_register_payout_new():
         return redirect(url_for("cash_register_page", date=day))
     if amount <= 0:
         flash("Amount must be greater than 0.", "error")
+        return redirect(url_for("cash_register_page", date=day))
+    # Recomputed fresh, not trusted from the page — same reasoning as
+    # every other cap in this app: this is the live figure a cash-moving
+    # action needs to be checked against, not whatever the page happened
+    # to show when it was opened.
+    drawer_cash = logic.cash_register_totals(db, day)["Cash"]
+    if amount > drawer_cash + 1e-9:
+        flash(f"That's more than the {logic.fmt_money(drawer_cash)} IQD actually in the register for {day}.", "error")
         return redirect(url_for("cash_register_page", date=day))
     reason = (f.get("reason") or "").strip()
     if not reason:
@@ -5438,8 +5610,12 @@ if __name__ == "__main__":
 
     if os.environ.get("VETCLINICSYSTEMIQ_DEV") == "1":
         # Flask's dev server — convenient for local debugging only; not used
-        # for normal clinic operation.
-        app.run(debug=True, host="0.0.0.0", port=5050)
+        # for normal clinic operation. Loopback only, not 0.0.0.0: the
+        # debug console this mode exposes on a crash is PIN-protected but
+        # otherwise unauthenticated, and 0.0.0.0 would put it within reach
+        # of every other device on the clinic network, not just this
+        # machine.
+        app.run(debug=True, host="127.0.0.1", port=5050)
     else:
         from waitress import serve
         # Configurable via env, defaulting to the same 0.0.0.0:5050 this

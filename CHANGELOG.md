@@ -3,6 +3,28 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.4.7] - 2026-08-23
+
+### Fixed
+- **POS checkout accepted cash below the sale total and marked it fully paid regardless** — a cashier could complete a sale having collected far less than owed, with no error and no record of the shortfall. Now rejected until the full amount is collected.
+- **Service refunds had no cap against what was actually paid** — any amount could be refunded against any visit or inpatient case, including one with zero payments on it (retail/POS refunds were already correctly capped; this closes the same gap on the service side), with a row lock closing the same race between two concurrent refunds.
+- **Bill rounding used banker's rounding, not half-up** — a bill of exactly 125 IQD rounded to 0 ("free"); other exact-half amounts rounded inconsistently depending on which side happened to be an even multiple. Fixed to always round up on a tie, and closed a boundary gap that let a 125 IQD bill slip past the "never present a real charge as free" floor. Retail refunds now round down instead of nearest, so a refund can never exceed what the returned items add up to.
+- **Visit/inpatient payments, consignment settlements, and cash-register payouts all allowed unlimited overpayment** — only checked the amount was positive, unlike boarding payments (and distributor bill payments, fixed earlier this cycle), which already capped correctly. All four now capped against their live balance, with a row lock closing the same race.
+- **Inpatient billing never re-checked a standing discount against non-discountable items** — unlike visit billing, which already re-validates on every save, a discount could be applied to an inpatient case and then a non-discountable procedure added afterward with zero resistance. Now matches visit billing's protection.
+- **Account lockout was sliding, not fixed-length** — a single new failed login every few minutes kept re-arming the same 15-minute lock indefinitely, letting an attacker permanently lock out any known username (including `admin`, documented in the README) at negligible cost. Now escalates per fresh lockout episode (15/30/60/120 minutes, capped at 4 hours) and resets on a real successful login.
+- **A password change or admin reset didn't invalidate that account's other active sessions** — a stolen session cookie kept working for up to 12 hours after the password changed, including right after an admin reset a suspected-compromised account. Now stamped and checked on every request.
+- Login didn't clear pre-authentication session state before establishing the authenticated session (minor hardening; Flask's signed-cookie sessions make this hard to actually exploit).
+- A user forced to change their password who clicked **Logout** was redirected back to Change Password instead of actually logging out.
+- The in-app updater's release-tarball extraction had no member filtering; added Python's built-in `filter="data"` safety net (falls back cleanly on Python <3.12).
+- Backup `.dump` files (which contain full patient/owner records) were written at the process's default umask, potentially group/world-readable — now locked to owner-only immediately after each backup.
+- **A real self-update would have silently orphaned every existing patient attachment** (X-rays, bloodwork, test results) and reset the error log — both were anchored to the current release folder instead of the persistent data directory, so the very first update after enabling the versioned-release layout would have left uploads unreachable and logging discontinuous. Found via a cross-check against the sibling deployment's port of this same update mechanism.
+- The Settings folder browser inserted server folder/file names into the page without full escaping — rebuilt to use safe DOM construction instead of string-built HTML.
+- Flask's debug server (opt-in via an env var, not used in normal operation) bound to every device on the network instead of just this machine.
+- Added a baseline Content-Security-Policy header.
+- An oversized `?page=` value on any list page, or a null byte anywhere in a request, surfaced as a raw, unhandled error page instead of a clean response.
+- Sales History's date filter was the one place that skipped validation before filtering — brought in line with Visits and Refunds, which already validated correctly.
+- Removed several confirmed-dead functions and a stale legacy constant (zero call sites each, verified via repo-wide search) and corrected two misleading code comments.
+
 ## [1.4.6] - 2026-08-22
 
 ### Fixed

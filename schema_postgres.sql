@@ -86,6 +86,13 @@ CREATE TABLE IF NOT EXISTS users (
     custom_discount_cap INTEGER CHECK (custom_discount_cap BETWEEN 0 AND 100),
     active BOOLEAN NOT NULL DEFAULT TRUE,
     must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Stamped on every password change/reset; compared against the value
+    -- captured in the session at login time on every request, so a
+    -- session predating the current password stops working immediately
+    -- instead of staying valid until it naturally expires. NULL on a
+    -- never-changed row is treated as "no invalidation point yet" —
+    -- harmless, just means an old session survives until its own expiry.
+    password_changed_at TEXT,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role_id);

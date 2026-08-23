@@ -139,6 +139,7 @@ def apply_schema():
 INCREMENTAL_SCHEMA_STATEMENTS = [
     "ALTER TABLE inventory_list ADD COLUMN IF NOT EXISTS consignment_since TEXT",
     "ALTER TABLE refunds ADD COLUMN IF NOT EXISTS refund_method TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TEXT",
 
     # --- One-time data normalization, not schema — same idempotent-list
     # mechanism, safe to run on every launch since each statement only

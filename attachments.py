@@ -14,7 +14,18 @@ from datetime import datetime
 
 import auth
 
-UPLOAD_ROOT = os.path.join(os.path.dirname(__file__), "uploads")
+# On the versioned-release layout (VETCLINICSYSTEMIQ_DATA_DIR set by the
+# launcher script — see updater.py / setup.py --enable-updates), uploads
+# must live in the persistent data dir, NOT next to this file — this
+# module's own file lives inside the current release folder, which an
+# in-app update replaces and an old-release prune later deletes. Anchoring
+# UPLOAD_ROOT here instead would silently orphan every existing patient
+# attachment (X-rays, bloodwork, test results) the moment the very first
+# real self-update ran. Falls back to the old relative-to-module location
+# when that env var isn't set (local dev, or an install that never
+# switched onto the versioned-release layout), unchanged from before.
+_data_dir = os.environ.get("VETCLINICSYSTEMIQ_DATA_DIR")
+UPLOAD_ROOT = os.path.join(_data_dir, "uploads") if _data_dir else os.path.join(os.path.dirname(__file__), "uploads")
 ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg"}
 
 # Magic-byte signatures so a renamed file can't slip past the extension check.

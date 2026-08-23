@@ -68,11 +68,6 @@ ADMIN_ONLY_TODAY = {
 }
 VET_RECEPTION_DEFAULT_PERMISSIONS = PERMISSION_KEY_SET - ADMIN_ONLY_TODAY
 
-# Legacy role name list — kept only for places (e.g. old data) that still
-# refer to a role by its seeded name. The live source of truth for "what
-# roles exist" is now the `roles` table.
-ROLES = ["Admin", "Vet", "Reception"]
-
 # Discount caps a brand-new install seeds Admin/Vet/Reception with. After
 # that, each role's actual cap lives in roles.discount_cap and is editable
 # from the Roles & Permissions tab — this dict is only the starting point.
@@ -288,23 +283,47 @@ def log_login(db, user_id, username, success):
 # account indefinitely.
 # ---------------------------------------------------------------------------
 LOCKOUT_THRESHOLD = 5
-LOCKOUT_WINDOW_MINUTES = 15
+LOCKOUT_BASE_MINUTES = 15
+LOCKOUT_MAX_MINUTES = 240
+LOCKOUT_LOOKBACK_HOURS = 24
 
 
 def login_lock_status(db, username):
-    """Returns (locked: bool, minutes_remaining: int|None, unlock_at: datetime|None)."""
+    """Returns (locked: bool, minutes_remaining: int|None, unlock_at: datetime|None).
+
+    Escalating, not sliding: every fresh block of LOCKOUT_THRESHOLD failed
+    attempts since the last successful login (bounded to the last
+    LOCKOUT_LOOKBACK_HOURS, so a stale failure from days ago doesn't count
+    forever) is one lockout "episode." Episode N locks for
+    min(15 * 2**(N-1), 240) minutes — 15/30/60/120, capped at 240 (4h)
+    from the 4th episode on — instead of the old fixed 15 minutes that
+    slid forward on every single new failure. That old behavior meant one
+    bad-password request every few minutes kept any known username locked
+    indefinitely; this still locks on the first 5 wrong attempts exactly
+    as before, but re-locking requires a genuinely fresh batch of 5 more
+    failed attempts each time, not just one, and each fresh batch costs
+    the attacker more wait time than the last. A real successful login
+    (or the lookback window itself) resets the count to zero.
+    """
     if not username:
         return False, None, None
-    cutoff = (datetime.now() - timedelta(minutes=LOCKOUT_WINDOW_MINUTES)).isoformat(timespec="seconds")
-    row = db.execute(
-        "SELECT COUNT(*) AS n, MAX(timestamp) AS last_at FROM login_log "
-        "WHERE username=? AND success=0 AND timestamp >= ?",
-        (username, cutoff),
-    ).fetchone()
-    if not row or row["n"] < LOCKOUT_THRESHOLD:
+    last_success = db.execute(
+        "SELECT MAX(timestamp) AS t FROM login_log WHERE username=? AND success=1", (username,)
+    ).fetchone()["t"]
+    lookback_cutoff = (datetime.now() - timedelta(hours=LOCKOUT_LOOKBACK_HOURS)).isoformat(timespec="seconds")
+    since = max(last_success, lookback_cutoff) if last_success else lookback_cutoff
+    failures = db.execute(
+        "SELECT timestamp FROM login_log WHERE username=? AND success=0 AND timestamp > ? ORDER BY timestamp",
+        (username, since),
+    ).fetchall()
+    n = len(failures)
+    if n < LOCKOUT_THRESHOLD:
         return False, None, None
-    last_at = datetime.fromisoformat(row["last_at"])
-    unlock_at = last_at + timedelta(minutes=LOCKOUT_WINDOW_MINUTES)
+    episode = n // LOCKOUT_THRESHOLD
+    last_failure_in_episode = failures[episode * LOCKOUT_THRESHOLD - 1]["timestamp"]
+    duration_minutes = min(LOCKOUT_BASE_MINUTES * (2 ** (episode - 1)), LOCKOUT_MAX_MINUTES)
+    last_at = datetime.fromisoformat(last_failure_in_episode)
+    unlock_at = last_at + timedelta(minutes=duration_minutes)
     remaining = unlock_at - datetime.now()
     if remaining.total_seconds() <= 0:
         return False, None, None

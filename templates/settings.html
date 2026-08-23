@@ -310,12 +310,15 @@ let folderBrowserTargetInputId = null;
 let folderBrowserFilePicker = false;
 let folderBrowserExt = '';
 
-function jsStringEscape(s) {
-  // Backslash MUST be escaped first -- Windows paths (e.g. D:\VetClinicSystemBackups)
-  // are the whole reason this needs to be more than just escaping quotes;
-  // escaping quotes alone silently drops every backslash in the string.
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
+// Delegated once on the container rather than re-bound per row (rows are
+// rebuilt on every navigation) — routes a row click by its data-action
+// instead of a per-row inline handler built from a server-supplied path.
+document.getElementById('folderBrowserList').addEventListener('click', function(e) {
+  const row = e.target.closest('.folder-browser-row');
+  if (!row) return;
+  if (row.dataset.action === 'nav') loadFolderBrowser(row.dataset.path);
+  else if (row.dataset.action === 'select-file') folderBrowserSelectFile(row.dataset.path);
+});
 
 // targetInputId: the <input> this picker fills in on selection.
 // opts.filePicker: when true, also lists files matching opts.ext and lets
@@ -357,24 +360,50 @@ async function loadFolderBrowser(path) {
     }
     folderBrowserCurrent = data.current;
     document.getElementById('folderBrowserPath').textContent = data.current;
-    let rows = '';
+    // Built via DOM APIs (textContent for the name, data-* attributes for
+    // the path a click should navigate/select) rather than string-built
+    // HTML/onclick attributes — a folder or file name is server-supplied
+    // and shouldn't be trusted as markup just because it came from a
+    // directory listing rather than user input directly.
+    listEl.innerHTML = '';
     if (data.parent) {
-      rows += `<div class="folder-browser-row" style="cursor:pointer; padding:8px 10px;" onclick="loadFolderBrowser('${jsStringEscape(data.parent)}')">↑ .. (up one level)</div>`;
+      const row = document.createElement('div');
+      row.className = 'folder-browser-row';
+      row.style.cssText = 'cursor:pointer; padding:8px 10px;';
+      row.textContent = '↑ .. (up one level)';
+      row.dataset.action = 'nav';
+      row.dataset.path = data.parent;
+      listEl.appendChild(row);
     }
     const files = data.files || [];
     if (data.folders.length === 0 && files.length === 0 && !data.parent) {
-      rows += `<div class="small muted" style="padding:12px;">No ${folderBrowserFilePicker ? 'backup files' : 'subfolders'} here.</div>`;
+      const empty = document.createElement('div');
+      empty.className = 'small muted';
+      empty.style.padding = '12px';
+      empty.textContent = `No ${folderBrowserFilePicker ? 'backup files' : 'subfolders'} here.`;
+      listEl.appendChild(empty);
     } else {
+      const sep = data.current.includes('\\') ? '\\' : '/';
+      const joinPath = name => (data.current.endsWith('/') || data.current.endsWith('\\')) ? data.current + name : data.current + sep + name;
       for (const name of data.folders) {
-        const full = (data.current.endsWith('/') || data.current.endsWith('\\')) ? data.current + name : data.current + (data.current.includes('\\') ? '\\' : '/') + name;
-        rows += `<div class="folder-browser-row" style="cursor:pointer; padding:8px 10px;" onclick="loadFolderBrowser('${jsStringEscape(full)}')">📁 ${name}</div>`;
+        const row = document.createElement('div');
+        row.className = 'folder-browser-row';
+        row.style.cssText = 'cursor:pointer; padding:8px 10px;';
+        row.textContent = '📁 ' + name;
+        row.dataset.action = 'nav';
+        row.dataset.path = joinPath(name);
+        listEl.appendChild(row);
       }
       for (const name of files) {
-        const full = (data.current.endsWith('/') || data.current.endsWith('\\')) ? data.current + name : data.current + (data.current.includes('\\') ? '\\' : '/') + name;
-        rows += `<div class="folder-browser-row" style="cursor:pointer; padding:8px 10px;" onclick="folderBrowserSelectFile('${jsStringEscape(full)}')">🗄️ ${name}</div>`;
+        const row = document.createElement('div');
+        row.className = 'folder-browser-row';
+        row.style.cssText = 'cursor:pointer; padding:8px 10px;';
+        row.textContent = '🗄️ ' + name;
+        row.dataset.action = 'select-file';
+        row.dataset.path = joinPath(name);
+        listEl.appendChild(row);
       }
     }
-    listEl.innerHTML = rows;
   } catch (e) {
     errEl.textContent = 'Could not reach the server.';
     errEl.style.display = 'block';
