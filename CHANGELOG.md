@@ -3,6 +3,18 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.5.1] - 2026-08-23
+
+### Fixed
+- **Auto-generated inventory barcodes were 12 digits, not real EAN-13's
+  13** — one digit short in the random body, so every generated barcode
+  failed strict EAN-13 validation. Now generates the correct length;
+  already-generated barcodes are unaffected and keep printing normally.
+- **A visit's attachment folder was named with a doubled prefix**
+  (`VV0042` instead of `V0042`), contradicting this app's own documented
+  folder-naming convention. New attachments now use the correct single
+  prefix; `reconcile_attachments.py` updated to match.
+
 ## [1.5.0] - 2026-08-23
 
 ### Fixed

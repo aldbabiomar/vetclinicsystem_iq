@@ -89,18 +89,18 @@ def resolve_record_key(key):
     """Reverses attachments.py's record_key(). Returns ("visit", visit_id)
     or ("inpatient", case_id), or None if `key` matches neither pattern.
 
-    Visit folders are double-prefixed ("VV0042"), not "V0042" — record_key()
-    does prefix + record_id, and a visit's record_id (db.next_id(db, "V"))
-    is already "V0042" by the time it gets there, so the visit branch
-    always produces "V" + "V0042". Inpatient case IDs are plain integers
-    (an IDENTITY column), so that branch is clean: "IC" + 7 = "IC7"."""
-    if key.startswith("VV"):
-        return "visit", key[1:]
+    A visit's record_id (db.next_id(db, "V")) is already "V0042" by the
+    time it reaches record_key(), so the visit branch there returns it
+    as-is — the on-disk folder is "V0042", not a doubled "VV0042".
+    Inpatient case IDs are plain integers (an IDENTITY column), so that
+    branch is clean: "IC" + 7 = "IC7"."""
     if key.startswith("IC"):
         try:
             return "inpatient", int(key[2:])
         except ValueError:
             return None
+    if key.startswith("V"):
+        return "visit", key
     return None
 
 

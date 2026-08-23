@@ -37,8 +37,13 @@ SIGNATURES = {
 
 
 def record_key(record_type, record_id):
+    # A visit's record_id (db.next_id(db, "V")) is already "V0042" by the
+    # time it gets here — prepending "V" again would produce "VV0042",
+    # contradicting the folder-layout contract documented at the top of
+    # this file ("record_key is the visit ID, e.g. V0042"). Only inpatient
+    # case IDs (plain integers) actually need a prefix added.
     prefix = "V" if record_type == "visit" else "IC"
-    return f"{prefix}{record_id}"
+    return f"{prefix}{record_id}" if record_type != "visit" else str(record_id)
 
 
 def _ext(filename):
