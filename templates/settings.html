@@ -244,6 +244,12 @@ async function rollbackUpdate() {
 {% endif %}
 
 <div class="section-title">Restore From Backup</div>
+{% if incomplete_restore %}
+<div class="flash warn" style="background:var(--warn-tint); color:var(--warn); margin-bottom:12px;">
+  A restore may not have completed — the app was stopped or crashed partway through the last one.
+  Check the database carefully before continuing to use the app.
+</div>
+{% endif %}
 <p class="small muted" style="margin-top:-6px;">
   Replaces <strong>all</strong> current data in VetClinicSystem IQ with the contents of a backup file. This can't be undone —
   take a fresh backup first if you're not sure. Uploaded files (X-rays, lab results) aren't part of the backup

@@ -8,6 +8,10 @@ import math
 
 SMALLEST_NOTE = 250
 
+# Flat ceiling on the cumulative "Clean Up" write-off allowed per bill —
+# see CLEANUP_FEATURE_PLAN.md §3.3. Not per-role; a global constant.
+CLEANUP_CAP = 1000
+
 
 def round_to_denomination(amount, denom=SMALLEST_NOTE, mode="nearest"):
     """

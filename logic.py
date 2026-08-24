@@ -42,12 +42,38 @@ def get_setting(db, key, default=None):
     return row["value"] if row else default
 
 
+def int_setting(db, key, default):
+    """Never raises. Settings can be written by import_seed.py (unvalidated)
+    and by hand, so a stored non-numeric value must degrade to the default
+    rather than take down every page that reads it. See ERROR_500_AUDIT.md
+    E-13."""
+    try:
+        return int(get_setting(db, key, default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def backup_alert_message(last_backup_row):
     """Returns a warning string for the Dashboard, or None if backups look healthy."""
     if not last_backup_row:
         return "No database backup has ever run yet — set a backup folder on the Settings page."
     if last_backup_row["status"] == "failed":
         return f"The last database backup failed: {last_backup_row['error'] or 'unknown error'}."
+    if last_backup_row["status"] == "running":
+        # reap_stale_running() (backup.py, called at app boot) cleans up a
+        # row stranded by a killed process — but within the same still-
+        # running app session, a row that's been "running" unreasonably
+        # long is the same signal, just not yet reaped. Left unflagged,
+        # this status is neither "failed" nor 2+-days-old, so the checks
+        # below would otherwise report healthy backups for as long as it
+        # sits there. See ORPHANED_RECORDS_AUDIT.md F-21.
+        try:
+            started_dt = datetime.fromisoformat(last_backup_row["started_at"])
+        except (TypeError, ValueError):
+            started_dt = None
+        if started_dt and (datetime.now() - started_dt).total_seconds() > 6 * 3600:
+            return "The last backup started but never finished — check the Settings page."
+        return None
     started = parse_date(last_backup_row["started_at"])
     if started and (date.today() - started).days >= 2:
         return "The database hasn't been backed up in 2+ days — check the Settings page."
@@ -186,8 +212,8 @@ def _txn_qty_since_batch(db, cutoffs):
 # Inventory Status
 # ---------------------------------------------------------------------------
 def inventory_status(db):
-    audit_overdue_days = int(get_setting(db, "audit_overdue_days", 35))
-    expiry_soon_days = int(get_setting(db, "expiry_soon_days", 60))
+    audit_overdue_days = int_setting(db, "audit_overdue_days", 35)
+    expiry_soon_days = int_setting(db, "expiry_soon_days", 60)
     today = date.today()
 
     items = [dict(r) for r in db.execute("SELECT * FROM inventory_list WHERE active=true ORDER BY name").fetchall()]
@@ -415,11 +441,16 @@ def save_visit_billing_lines(db, visit_id, lines):
         )
 
 
-def compute_bill_totals(subtotal, discount_percent, paid):
+def compute_bill_totals(subtotal, discount_percent, paid, cleanup_amount=0):
     """
     Shared by visit_billing_summary() and inpatient_billing_summary() so the
     money math (total/balance/status) is defined in exactly one place instead
     of being duplicated per billing type.
+
+    cleanup_amount is a capped, explicit staff write-off (see
+    CLEANUP_FEATURE_PLAN.md) applied AFTER the 250-rounding/anti-"looks
+    free" guard below, on top of whatever those already produced — not a
+    replacement for either.
     """
     discount_percent = discount_percent or 0
     raw_total = subtotal * (1 - discount_percent / 100)
@@ -433,6 +464,7 @@ def compute_bill_totals(subtotal, discount_percent, paid):
     # round_to_denomination's internals to stay correct.
     if 0 < raw_total <= 125 and discount_percent < 100:
         total = money.SMALLEST_NOTE
+    total = max(total - (cleanup_amount or 0), 0)
     paid = round(paid or 0, 2)
     balance = money.round_to_denomination(total - paid)
     if total <= 0:
@@ -450,7 +482,7 @@ def visit_billing_summary(db, visit_id):
     b = db.execute("SELECT * FROM billing WHERE visit_id=?", (visit_id,)).fetchone()
     if not b:
         return {"billing_type": "Automatic", "lines": [], "subtotal": 0, "discount_percent": 0,
-                "total": 0, "paid": 0, "balance": 0, "status": "N/A"}
+                "cleanup_amount": 0, "total": 0, "paid": 0, "balance": 0, "status": "N/A"}
 
     if b["billing_type"] == "Manual":
         lines = [{"id": None, "name": "Veterinary Services", "category": "Service",
@@ -472,11 +504,12 @@ def visit_billing_summary(db, visit_id):
         subtotal = sum(l["line_total"] for l in lines)
 
     discount_percent = b["discount_percent"] or 0
+    cleanup_amount = b["cleanup_amount"] or 0
     paid_row = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE visit_id=?", (visit_id,)).fetchone()
-    total, paid, balance, status = compute_bill_totals(subtotal, discount_percent, paid_row["s"])
+    total, paid, balance, status = compute_bill_totals(subtotal, discount_percent, paid_row["s"], cleanup_amount)
     return {"billing_type": b["billing_type"], "lines": lines, "subtotal": round(subtotal, 2),
-            "discount_percent": discount_percent, "total": total, "paid": paid, "balance": balance,
-            "status": status}
+            "discount_percent": discount_percent, "cleanup_amount": cleanup_amount,
+            "total": total, "paid": paid, "balance": balance, "status": status}
 
 
 def refresh_visit_billing_total(db, visit_id):
@@ -509,12 +542,13 @@ def inpatient_billing_summary(db, case_id):
         subtotal += line_total
         lines.append({"id": r["id"], "name": r["name"], "quantity": r["quantity"],
                        "unit_price": unit_price, "line_total": round(line_total, 2)})
-    case = db.execute("SELECT discount_percent FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
+    case = db.execute("SELECT discount_percent, cleanup_amount FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
     discount_percent = case["discount_percent"] if case else 0
+    cleanup_amount = (case["cleanup_amount"] if case else 0) or 0
     paid_row = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE inpatient_case_id=?", (case_id,)).fetchone()
-    total, paid, balance, status = compute_bill_totals(subtotal, discount_percent, paid_row["s"])
+    total, paid, balance, status = compute_bill_totals(subtotal, discount_percent, paid_row["s"], cleanup_amount)
     return {"lines": lines, "subtotal": round(subtotal, 2), "discount_percent": discount_percent,
-            "total": total, "paid": paid, "balance": balance, "status": status}
+            "cleanup_amount": cleanup_amount, "total": total, "paid": paid, "balance": balance, "status": status}
 
 
 def refresh_inpatient_total(db, case_id):
@@ -566,13 +600,14 @@ def boarding_billing_summary_from_fields(b, paid):
         subtotal = boarding_suggested_total(b["price_per_day"], b["entry_date"], b["dismissal_date"]) or 0
     else:
         subtotal = b["total"] or 0
-    total, paid, balance, status = compute_bill_totals(subtotal, 0, paid)
-    return {"total": total, "paid": paid, "balance": balance, "status": status}
+    cleanup_amount = (b["cleanup_amount"] if b else 0) or 0
+    total, paid, balance, status = compute_bill_totals(subtotal, 0, paid, cleanup_amount)
+    return {"total": total, "paid": paid, "balance": balance, "status": status, "cleanup_amount": cleanup_amount}
 
 
 def boarding_billing_summary(db, boarding_id):
     b = db.execute(
-        "SELECT total, total_is_auto, price_per_day, entry_date, dismissal_date, dismissed "
+        "SELECT total, total_is_auto, price_per_day, entry_date, dismissal_date, dismissed, cleanup_amount "
         "FROM boarding_sessions WHERE id=?", (boarding_id,)
     ).fetchone()
     paid_row = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE boarding_id=?", (boarding_id,)).fetchone()
@@ -1851,7 +1886,7 @@ def slot_conflict(db, appt_date, slot_label, resource_type, resource_id):
     return bool(row)
 
 
-def orphaned_appointments(db):
+def orphaned_appointments(db, include_past=False):
     """Upcoming appointments whose (slot_label, resource_type,
     resource_id) no longer matches anything day_grid() currently renders
     — either the vet they're booked against was deactivated since, or
@@ -1867,13 +1902,20 @@ def orphaned_appointments(db):
     appt_slot_minutes — but this doesn't depend on that warning having
     been heeded, or on every possible future cause having been thought of
     ahead of time)."""
+    # include_past=True is a deliberate, explicit opt-in (Appointments'
+    # "Show past unreachable bookings" toggle) — a booking that became
+    # unreachable *and* whose date has since passed would otherwise be
+    # invisible permanently, with no other page listing appointments by
+    # id. See ORPHANED_RECORDS_AUDIT.md F-18.
     valid_labels = {s["label"] for s in generate_slots(db)}
     active_vet_ids = {v["id"] for v in vet_users(db)}
+    date_filter = "" if include_past else "WHERE a.appt_date >= ?"
+    params = () if include_past else (date.today().isoformat(),)
     rows = db.execute(
         "SELECT a.*, u.full_name AS vet_name FROM appointments a "
         "LEFT JOIN users u ON u.id = a.resource_id "
-        "WHERE a.appt_date >= ? ORDER BY a.appt_date, a.slot_label",
-        (date.today().isoformat(),),
+        f"{date_filter} ORDER BY a.appt_date, a.slot_label",
+        params,
     ).fetchall()
     out = []
     for a in rows:
@@ -2182,8 +2224,16 @@ def consignment_balance(db, distributor_id):
 
     period_end = datetime.now().isoformat(timespec="seconds")
 
+    # si.distributor_id is a snapshot taken at checkout time (see
+    # pos_checkout()) — this is what makes attribution historically stable:
+    # re-pointing an item from Distributor A to B afterward (Inventory
+    # Catalog's distributor field) no longer moves a past sale's cost to B.
+    # COALESCE'd against the item's *current* distributor_id only for sales
+    # that predate this column (si.distributor_id is NULL for those), so
+    # existing history isn't silently dropped. See ORPHANED_RECORDS_AUDIT.md
+    # F-07.
     sold_where = (
-        "WHERE i.ownership_type='Consignment' AND i.distributor_id=? "
+        "WHERE i.ownership_type='Consignment' AND COALESCE(si.distributor_id, i.distributor_id)=? "
         "AND s.sale_date > GREATEST(?, COALESCE(i.consignment_since, ''))"
     )
     sold_params = [distributor_id, period_start or ""]

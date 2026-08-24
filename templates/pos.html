@@ -21,6 +21,10 @@
         <label>Discount % (Max {{ discount_cap }}%)</label>
         <input type="number" id="discountInput" min="0" max="{{ discount_cap }}" value="{{ fv(form, 'discount_percent', 0) }}" oninput="renderCart()">
       </div>
+      <div class="field" style="margin:10px 0;">
+        <label>Clean Up (max {{ CLEANUP_CAP }} IQD)</label>
+        <input type="number" id="cleanupInput" min="0" value="{{ fv(form, 'cleanup_amount', 0) }}" oninput="renderCart()">
+      </div>
       <div class="detail-item"><div class="k">Total</div><div class="v" style="font-size:20px; font-weight:700;" id="cartTotal">0 IQD</div></div>
       <div class="field" style="margin:10px 0;">
         <label>Payment Method</label>
@@ -40,6 +44,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
         <input type="hidden" name="discount_percent" id="discountHidden">
+        <input type="hidden" name="cleanup_amount" id="cleanupHidden">
         <input type="hidden" name="payment_method" id="paymentHidden">
         <input type="hidden" name="cash_received" id="cashReceivedHidden">
         <div id="cartFieldsHidden"></div>
@@ -138,7 +143,12 @@ function renderCart() {
   // Rounded to the nearest 250 IQD note — matches the server-side total
   // computed at checkout (app.py's pos_checkout()), so what's previewed
   // here is what actually gets charged.
-  const total = Math.round(rawTotal / 250) * 250;
+  const roundedTotal = Math.round(rawTotal / 250) * 250;
+  const cleanup = parseFloat(document.getElementById('cleanupInput').value) || 0;
+  // Preview only — pos_checkout() recomputes and validates the
+  // authoritative total (and the Clean Up cap) server-side regardless of
+  // what this hidden field carries, same trust boundary as discount today.
+  const total = Math.max(roundedTotal - cleanup, 0);
   document.getElementById('cartSubtotal').textContent = subtotal.toLocaleString() + ' IQD';
   document.getElementById('cartTotal').textContent = total.toLocaleString() + ' IQD';
   renderChange(total);
@@ -175,6 +185,7 @@ renderCart();
 function prepareSubmit() {
   if (!cart.length) { window.VZToast.show('Cart is empty.', 'error'); return false; }
   document.getElementById('discountHidden').value = document.getElementById('discountInput').value;
+  document.getElementById('cleanupHidden').value = document.getElementById('cleanupInput').value;
   document.getElementById('paymentHidden').value = document.getElementById('paymentMethod').value;
   document.getElementById('cashReceivedHidden').value =
     document.getElementById('paymentMethod').value === 'Cash' ? document.getElementById('cashReceivedInput').value : '';

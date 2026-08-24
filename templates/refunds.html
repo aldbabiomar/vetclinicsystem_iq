@@ -17,6 +17,7 @@
     {% set rform = form if form_kind == 'retail' else None %}
     <div id="refundSaleLines" style="display:{{ 'block' if retail_error_sale_id else 'none' }};">
       <div class="small muted" style="margin-bottom:6px;">Sale #<span id="refundSaleIdLabel"></span> — <span id="refundSaleDateLabel"></span></div>
+      <div id="refundSaleCleanupNote" class="small" style="display:none; margin-bottom:8px;"></div>
       <div id="refundLineList"></div>
 
       <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line);">
@@ -64,8 +65,8 @@
             {% for m in payment_methods %}<option value="{{ m }}" {{ 'selected' if fv(sform, 'refund_method')==m }}>{{ m }}</option>{% endfor %}
           </select>
         </div>
-        <div class="field"><label>Visit ID (optional)</label><input type="text" name="visit_id" value="{{ fv(sform, 'visit_id') }}" placeholder="e.g. V001"></div>
-        <div class="field"><label>Inpatient Case ID (optional)</label><input type="text" name="inpatient_case_id" value="{{ fv(sform, 'inpatient_case_id') }}" placeholder="e.g. 12"></div>
+        <div class="field"><label>Visit ID (required — or Inpatient Case ID below)</label><input type="text" name="visit_id" value="{{ fv(sform, 'visit_id') }}" placeholder="e.g. V001"></div>
+        <div class="field"><label>Inpatient Case ID (required — or Visit ID above)</label><input type="text" name="inpatient_case_id" value="{{ fv(sform, 'inpatient_case_id') }}" placeholder="e.g. 12"></div>
         <div class="field" style="grid-column:1/-1;"><label>Reason (optional)</label><input type="text" name="reason" value="{{ fv(sform, 'reason') }}" placeholder="e.g. service not completed"></div>
       </div>
       <div class="form-actions"><button class="btn" type="submit">Process Service Refund</button></div>
@@ -111,7 +112,7 @@
           {% if not r.visit_id and not r.inpatient_case_id %}—{% endif %}
         {% endif %}
       </td>
-      <td class="num-col">{{ r.amount|money }} IQD</td>
+      <td class="num-col">{{ r.amount|money }} IQD{% if r.cleanup_amount_at_refund %}<div class="meta small">Clean Up on original bill: {{ r.cleanup_amount_at_refund|money }} IQD</div>{% endif %}</td>
       <td class="small">{{ r.refund_method or "—" }}</td>
       <td class="small muted">{{ r.reason or "—" }}</td>
       <td class="small">{{ r.processed_by_name or "—" }}</td>
@@ -146,6 +147,13 @@ async function lookupRefundSale() {
     document.getElementById('refundSaleIdLabel').textContent = data.sale_id;
     document.getElementById('refundSaleDateLabel').textContent = data.sale_date;
     document.getElementById('refundSaleIdHidden').value = data.sale_id;
+    const cleanupNote = document.getElementById('refundSaleCleanupNote');
+    if (data.cleanup_amount) {
+      cleanupNote.textContent = `This sale had a ${data.cleanup_amount.toLocaleString()} IQD Clean Up applied — total refunds against it can't exceed what was actually collected (${data.sale_total.toLocaleString()} IQD).`;
+      cleanupNote.style.display = 'block';
+    } else {
+      cleanupNote.style.display = 'none';
+    }
     renderRefundLines();
     linesPanel.style.display = '';
   } catch (err) {
