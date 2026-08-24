@@ -3,6 +3,17 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.7.0] - 2026-08-24
+
+### Added
+- **A VetClinicSystem IQ icon on the Desktop.** Double-click it to start
+  the app — and if the app is already running, it just brings it up in
+  your browser instead of starting a second copy. It keeps working after
+  updates, shutdowns and restarts, so it's there as a reliable way in if
+  "start automatically when this computer starts" ever doesn't fire. It's
+  created for you during setup; if it ever gets deleted, running setup
+  again puts it back.
+
 ## [1.6.1] - 2026-08-24
 
 ### Fixed
