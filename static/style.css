@@ -21,9 +21,9 @@
   --sidebar-active-ink: #955F62;
 
   /* ---- Warm tan accent (#d7bbb2), used for secondary highlights ---- */
-  --accent-tan: #D7BBB2;
-  --accent-tan-tint: #F6ECE7;
-  --accent-tan-ink: #8A5E4D;
+  --accent-alt: #D7BBB2;
+  --accent-alt-tint: #F6ECE7;
+  --accent-alt-ink: #8A5E4D;
 
   /* ---- Semantic colors, softened to match the pastel family ---- */
   --ok: #7C9D82;
@@ -64,9 +64,9 @@ html[data-theme="dark"] {
   --sidebar-active: #2E4756;
   --sidebar-active-ink: #F3E9E6;
 
-  --accent-tan: #D7BBB2;
-  --accent-tan-tint: #3A2E28;
-  --accent-tan-ink: #F1D9CD;
+  --accent-alt: #D7BBB2;
+  --accent-alt-tint: #3A2E28;
+  --accent-alt-ink: #F1D9CD;
 
   --ok: #93C299;
   --ok-tint: #1E2B20;
@@ -106,9 +106,15 @@ html[data-palette="champet"] {
   --sidebar-active: #37477A;
   --sidebar-active-ink: #E7ECF5; /* derived: active pill is a lighter navy, not white, so text stays light */
 
-  --accent-tan: #8478B0;       /* placeholder — needs sign-off, see plan's gap note */
-  --accent-tan-tint: #EFEBF7;  /* placeholder, paired with the above */
-  --accent-tan-ink: #4E4478;   /* derived from the placeholder accent — resign off together */
+  /* Signed off 2026-08-24. Purple rather than a variant of ChamPet's teal,
+     deliberately: this token's main job is a chart series colour that has to
+     stay distinct from --primary (teal), --sidebar-bg (navy), --warn (amber)
+     and --muted (grey) all at once. Named --accent-alt, not --accent-tan,
+     because the name has to hold for both palettes — Vetzone's value is a
+     literal tan, this one isn't. */
+  --accent-alt: #8478B0;
+  --accent-alt-tint: #EFEBF7;
+  --accent-alt-ink: #4E4478;
 
   --ok: #4C9B79;
   --ok-tint: #E9F4EE;
@@ -145,9 +151,9 @@ html[data-palette="champet"][data-theme="dark"] {
   --sidebar-active: #2F3D63;
   --sidebar-active-ink: #E7ECF5;
 
-  --accent-tan: #8478B0;     /* unchanged from light, same pattern as Vetzone's accent-tan */
-  --accent-tan-tint: #2A2438;
-  --accent-tan-ink: #E4DEF2;
+  --accent-alt: #8478B0;     /* unchanged from light, same as Vetzone holds its own accent across both */
+  --accent-alt-tint: #2A2438;
+  --accent-alt-ink: #E4DEF2;
 
   --ok: #6FBE9B;
   --ok-tint: #1B2E24;
@@ -546,7 +552,7 @@ textarea { resize: vertical; min-height: 72px; }
 .appt-head-cell { background: var(--muted-tint); font-weight: 700; font-size: 12px; padding: 9px 6px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line-soft); text-align: center; }
 .appt-slot-label { background: var(--muted-tint); font-size: 11px; color: var(--ink-soft); font-weight: 700; display: flex; align-items: center; justify-content: center; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line-soft); }
 .appt-chip { background: var(--primary-tint); color: var(--primary-dark); border-radius: 6px; padding: 3px 6px; font-size: 11px; font-weight: 600; margin-bottom: 3px; cursor: pointer; }
-.appt-chip.grooming { background: var(--accent-tan-tint); color: var(--accent-tan-ink); }
+.appt-chip.grooming { background: var(--accent-alt-tint); color: var(--accent-alt-ink); }
 .appt-add-btn { width: 100%; border: 1px dashed var(--line); background: none; color: var(--muted); border-radius: 6px; font-size: 11px; padding: 3px; cursor: pointer; }
 .appt-add-btn:hover { background: var(--muted-tint); }
 

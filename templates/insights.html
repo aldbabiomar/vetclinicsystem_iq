@@ -179,7 +179,7 @@ const PAYMENT_MIX = {{ payment_mix|tojson }};
 const _cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const COLORS = {
   Service: _cssVar('--primary'), Medicine: _cssVar('--sidebar-bg'),
-  Retail: _cssVar('--accent-tan'), Boarding: _cssVar('--ok'),
+  Retail: _cssVar('--accent-alt'), Boarding: _cssVar('--ok'),
 };
 
 new Chart(document.getElementById('revenueChart'), {
@@ -205,7 +205,7 @@ new Chart(document.getElementById('paymentChart'), {
     labels: PAYMENT_MIX.map(r => r.method || 'Unspecified'),
     datasets: [{
       data: PAYMENT_MIX.map(r => r.total),
-      backgroundColor: [_cssVar('--primary'), _cssVar('--sidebar-bg'), _cssVar('--accent-tan'), _cssVar('--warn'), _cssVar('--muted')],
+      backgroundColor: [_cssVar('--primary'), _cssVar('--sidebar-bg'), _cssVar('--accent-alt'), _cssVar('--warn'), _cssVar('--muted')],
     }],
   },
   options: { responsive: true, plugins: { legend: { position: 'bottom' } } },
