@@ -50,6 +50,12 @@
 
 /* ---- Dark theme (optional, per-user toggle — same variables, new values) ---- */
 html[data-theme="dark"] {
+  /* Tells the browser to render its OWN chrome dark too — date/time
+     pickers, select dropdowns, scrollbars. Without it those stay light
+     and punch white holes in a dark page. Inherited by the ChamPet dark
+     palette as well, since that element still matches this selector. */
+  color-scheme: dark;
+
   --bg: #171313;
   --paper: #211C1C;
   --ink: #F3E9E6;
@@ -306,6 +312,19 @@ html[data-theme="dark"] .theme-toggle-btn .icon-moon { display: block; }
 .btn.danger:hover { background: var(--danger-dark); }
 .btn.ok { background: var(--ok); }
 .btn.ok:hover { opacity: 0.9; }
+
+/* ---- Filled controls in dark mode ----
+   The palette's accent colours are lifted in dark mode so they read as TEXT
+   against a dark background — which is exactly what makes white text on top
+   of them fail (2.0–2.8:1 across every palette). Flipping the label to the
+   page colour fixes it everywhere at once (6.5–9.2:1) and keeps the fills
+   vivid, instead of deepening every accent and breaking its text use.
+   .secondary is excluded: it is not a filled control — it sits on --paper
+   and keeps --ink. */
+html[data-theme="dark"] .btn:not(.secondary),
+html[data-theme="dark"] .nav-badge,
+html[data-theme="dark"] .chip.active { color: var(--bg); }
+
 .actions-cell { max-width: 300px; }
 .action-btns { display: flex; flex-direction: column; align-items: stretch; width: fit-content; gap: 6px; }
 .action-btns form { display: contents; }
