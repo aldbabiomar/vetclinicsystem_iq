@@ -3,6 +3,15 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.7.1] - 2026-08-24
+
+### Fixed
+- Buttons that warn before something destructive (Restore Now, and others
+  like it) turned a slightly-off colour when hovered — one that didn't
+  belong to VetClinicSystem IQ's own palette. They now darken correctly. The same
+  fix cleans up a handful of other places where a stray colour had been
+  hardcoded instead of following the app's palette, including a grooming label on the Appointments grid that showed the wrong text colour under the ChamPet theme.
+
 ## [1.7.0] - 2026-08-24
 
 ### Added
