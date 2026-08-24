@@ -19,17 +19,19 @@
       <div class="detail-item"><div class="k">Subtotal</div><div class="v" id="cartSubtotal">0 IQD</div></div>
       <div class="field" style="margin:10px 0;">
         <label>Discount % (Max {{ discount_cap }}%)</label>
-        <input type="number" id="discountInput" min="0" max="{{ discount_cap }}" value="0" oninput="renderCart()">
+        <input type="number" id="discountInput" min="0" max="{{ discount_cap }}" value="{{ fv(form, 'discount_percent', 0) }}" oninput="renderCart()">
       </div>
       <div class="detail-item"><div class="k">Total</div><div class="v" style="font-size:20px; font-weight:700;" id="cartTotal">0 IQD</div></div>
       <div class="field" style="margin:10px 0;">
         <label>Payment Method</label>
-        <select id="paymentMethod" onchange="toggleCashFields()"><option>Cash</option><option>Card</option><option>Transfer</option></select>
+        <select id="paymentMethod" onchange="toggleCashFields()">
+          {% for pm in ['Cash', 'Card', 'Transfer'] %}<option {{ 'selected' if fv(form, 'payment_method', 'Cash')==pm }}>{{ pm }}</option>{% endfor %}
+        </select>
       </div>
       <div id="cashFields">
         <div class="field" style="margin:10px 0;">
           <label>Cash Received (IQD)</label>
-          <input type="number" id="cashReceivedInput" step="250" min="0" oninput="renderCart()">
+          <input type="number" id="cashReceivedInput" step="250" min="0" value="{{ fv(form, 'cash_received') }}" oninput="renderCart()">
         </div>
         <div class="detail-item"><div class="k">Change Due</div><div class="v" style="font-size:18px; font-weight:700;" id="changeDue">—</div></div>
         <div class="meta small" id="changeNote" style="margin-top:2px;"></div>

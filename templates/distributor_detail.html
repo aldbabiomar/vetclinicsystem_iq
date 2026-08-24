@@ -21,17 +21,18 @@
 
 <div class="page-head">
   <div class="section-title">Order Bills</div>
-  <button class="btn" id="newBillBtn" onclick="document.getElementById('newBillForm').style.display='block'; this.style.display='none';">+ Log Bill</button>
+  <button class="btn" id="newBillBtn" style="display:{{ 'none' if show_new_bill_form else 'inline-flex' }};" onclick="document.getElementById('newBillForm').style.display='block'; this.style.display='none';">+ Log Bill</button>
 </div>
 
-<div class="card" id="newBillForm" style="display:none; margin-bottom:20px;">
+{% set bill_form = form if show_new_bill_form else None %}
+<div class="card" id="newBillForm" style="display:{{ 'block' if show_new_bill_form else 'none' }}; margin-bottom:20px;">
   <form method="post" action="{{ url_for('distributor_bill_new', dist_id=distributor.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-grid">
-      <div class="field"><label>Bill Date</label><input required type="date" name="bill_date" value="{{ today }}"></div>
-      <div class="field"><label>Bill / Invoice #</label><input name="bill_reference" placeholder="Distributor's own reference, optional"></div>
-      <div class="field"><label>Total Amount (IQD)</label><input required type="number" step="1" min="1" name="total_amount"></div>
-      <div class="field full"><label>Notes</label><input name="notes"></div>
+      <div class="field"><label>Bill Date</label><input required type="date" name="bill_date" value="{{ fv(bill_form, 'bill_date', today) }}"></div>
+      <div class="field"><label>Bill / Invoice #</label><input name="bill_reference" value="{{ fv(bill_form, 'bill_reference') }}" placeholder="Distributor's own reference, optional"></div>
+      <div class="field"><label>Total Amount (IQD)</label><input required type="number" step="1" min="1" name="total_amount" value="{{ fv(bill_form, 'total_amount') }}"></div>
+      <div class="field full"><label>Notes</label><input name="notes" value="{{ fv(bill_form, 'notes') }}"></div>
     </div>
     <div class="form-actions">
       <button class="btn" type="submit">Save Bill</button>
@@ -73,17 +74,18 @@
   </table>
 
   {% if bill.balance > 0 %}
+  {% set pay_form = form if (payment_error_bill_id and payment_error_bill_id == bill.id) else None %}
   <form method="post" action="{{ url_for('distributor_payment_new', dist_id=distributor.id, bill_id=bill.id) }}" class="form-grid" style="margin-top:12px;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div class="field"><label>Payment Date</label><input required type="date" name="payment_date" value="{{ today }}"></div>
-    <div class="field"><label>Amount (IQD)</label><input required type="number" step="1" min="1" max="{{ bill.balance|round|int }}" name="amount"></div>
+    <div class="field"><label>Payment Date</label><input required type="date" name="payment_date" value="{{ fv(pay_form, 'payment_date', today) }}"></div>
+    <div class="field"><label>Amount (IQD)</label><input required type="number" step="1" min="1" max="{{ bill.balance|round|int }}" name="amount" value="{{ fv(pay_form, 'amount') }}"></div>
     <div class="field"><label>Method</label>
       <select name="method">
         <option value="">—</option>
-        {% for m in payment_methods %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+        {% for m in payment_methods %}<option value="{{ m }}" {{ 'selected' if fv(pay_form, 'method')==m }}>{{ m }}</option>{% endfor %}
       </select>
     </div>
-    <div class="field full"><label>Notes</label><input name="notes"></div>
+    <div class="field full"><label>Notes</label><input name="notes" value="{{ fv(pay_form, 'notes') }}"></div>
     <div class="form-actions"><button class="btn secondary" type="submit">Record Payment</button></div>
   </form>
   {% endif %}

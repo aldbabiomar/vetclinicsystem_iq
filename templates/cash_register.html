@@ -98,10 +98,10 @@
       <input type="hidden" name="day" value="{{ day }}">
       <div class="form-grid">
         <div class="field" style="grid-column:1/-1;"><label>Amount (IQD)</label>
-          <input type="number" name="amount" min="1" step="1" required autofocus>
+          <input type="number" name="amount" min="1" step="1" value="{{ fv(form, 'amount') }}" required autofocus>
         </div>
         <div class="field" style="grid-column:1/-1;"><label>Reason</label>
-          <input type="text" name="reason" placeholder="e.g. paid the produce delivery driver" required>
+          <input type="text" name="reason" value="{{ fv(form, 'reason') }}" placeholder="e.g. paid the produce delivery driver" required>
         </div>
       </div>
       <div class="form-actions">
@@ -125,10 +125,10 @@
       <input type="hidden" name="day" value="{{ day }}">
       <div class="form-grid">
         <div class="field" style="grid-column:1/-1;"><label>Cash Counted From the Register (IQD)</label>
-          <input type="number" name="counted_cash" min="0" step="1" required autofocus>
+          <input type="number" name="counted_cash" min="0" step="1" value="{{ fv(form, 'counted_cash') }}" required autofocus>
         </div>
         <div class="field" style="grid-column:1/-1;"><label>Notes (optional)</label>
-          <input type="text" name="notes" placeholder="e.g. counted twice, drawer was short a 5,000 note">
+          <input type="text" name="notes" value="{{ fv(form, 'notes') }}" placeholder="e.g. counted twice, drawer was short a 5,000 note">
         </div>
       </div>
       <div class="form-actions">
@@ -138,4 +138,9 @@
     </form>
   </div>
 </div>
+{% if show_payout_modal or show_audit_modal %}
+<script>
+window.VZSpring.present(document.getElementById('{{ "payoutModal" if show_payout_modal else "auditModal" }}'), true, {});
+</script>
+{% endif %}
 {% endblock %}

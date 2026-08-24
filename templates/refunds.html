@@ -14,7 +14,8 @@
     </div>
     <div id="refundSaleError" class="small" style="color:var(--danger); display:none; margin-bottom:10px;"></div>
 
-    <div id="refundSaleLines" style="display:none;">
+    {% set rform = form if form_kind == 'retail' else None %}
+    <div id="refundSaleLines" style="display:{{ 'block' if retail_error_sale_id else 'none' }};">
       <div class="small muted" style="margin-bottom:6px;">Sale #<span id="refundSaleIdLabel"></span> — <span id="refundSaleDateLabel"></span></div>
       <div id="refundLineList"></div>
 
@@ -22,21 +23,21 @@
         <div class="detail-item"><div class="k">Refund Total</div><div class="v" id="refundCartTotal" style="font-size:20px; font-weight:700;">0 IQD</div></div>
 
         <label class="checkbox-row small" style="margin:12px 0; font-weight:500; text-transform:none;">
-          <input type="checkbox" id="restockCheck" checked> Return item(s) to stock
+          <input type="checkbox" id="restockCheck" {{ 'checked' if fv(rform, 'restock', 'on')=='on' }}> Return item(s) to stock
         </label>
 
         <form method="post" action="{{ url_for('refund_retail_save') }}" id="retailRefundForm">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="sale_id" id="refundSaleIdHidden">
+          <input type="hidden" name="sale_id" id="refundSaleIdHidden" value="{{ retail_error_sale_id or '' }}">
           <div class="form-grid">
-            <div class="field"><label>Refund Date</label><input type="date" name="refund_date" value="{{ today }}"></div>
+            <div class="field"><label>Refund Date</label><input type="date" name="refund_date" value="{{ fv(rform, 'refund_date', today) }}"></div>
             <div class="field"><label>Refund Method</label>
               <select name="refund_method" required>
                 <option value="">Select…</option>
-                {% for m in payment_methods %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+                {% for m in payment_methods %}<option value="{{ m }}" {{ 'selected' if fv(rform, 'refund_method')==m }}>{{ m }}</option>{% endfor %}
               </select>
             </div>
-            <div class="field" style="grid-column:1/-1;"><label>Reason (optional)</label><input type="text" name="reason" placeholder="e.g. wrong item, customer changed mind"></div>
+            <div class="field" style="grid-column:1/-1;"><label>Reason (optional)</label><input type="text" name="reason" value="{{ fv(rform, 'reason') }}" placeholder="e.g. wrong item, customer changed mind"></div>
           </div>
           <input type="hidden" name="restock" id="restockHidden">
           <div id="refundFieldsHidden"></div>
@@ -51,20 +52,21 @@
   <div class="card">
     <div class="section-title" style="margin-top:0;">Service Refund</div>
     <p class="small muted">Removes a revenue amount only — no stock is touched. Link it to a Visit or Inpatient case ID for your own records, if relevant (optional).</p>
+    {% set sform = form if form_kind == 'service' else None %}
     <form method="post" action="{{ url_for('refund_service_save') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
-        <div class="field"><label>Refund Amount (IQD)</label><input type="number" name="amount" min="1" step="1" required></div>
-        <div class="field"><label>Refund Date</label><input type="date" name="refund_date" value="{{ today }}"></div>
+        <div class="field"><label>Refund Amount (IQD)</label><input type="number" name="amount" min="1" step="1" value="{{ fv(sform, 'amount') }}" required></div>
+        <div class="field"><label>Refund Date</label><input type="date" name="refund_date" value="{{ fv(sform, 'refund_date', today) }}"></div>
         <div class="field"><label>Refund Method</label>
           <select name="refund_method" required>
             <option value="">Select…</option>
-            {% for m in payment_methods %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+            {% for m in payment_methods %}<option value="{{ m }}" {{ 'selected' if fv(sform, 'refund_method')==m }}>{{ m }}</option>{% endfor %}
           </select>
         </div>
-        <div class="field"><label>Visit ID (optional)</label><input type="text" name="visit_id" placeholder="e.g. V001"></div>
-        <div class="field"><label>Inpatient Case ID (optional)</label><input type="text" name="inpatient_case_id" placeholder="e.g. 12"></div>
-        <div class="field" style="grid-column:1/-1;"><label>Reason (optional)</label><input type="text" name="reason" placeholder="e.g. service not completed"></div>
+        <div class="field"><label>Visit ID (optional)</label><input type="text" name="visit_id" value="{{ fv(sform, 'visit_id') }}" placeholder="e.g. V001"></div>
+        <div class="field"><label>Inpatient Case ID (optional)</label><input type="text" name="inpatient_case_id" value="{{ fv(sform, 'inpatient_case_id') }}" placeholder="e.g. 12"></div>
+        <div class="field" style="grid-column:1/-1;"><label>Reason (optional)</label><input type="text" name="reason" value="{{ fv(sform, 'reason') }}" placeholder="e.g. service not completed"></div>
       </div>
       <div class="form-actions"><button class="btn" type="submit">Process Service Refund</button></div>
     </form>
@@ -197,5 +199,21 @@ function prepareRefundSubmit() {
   document.getElementById('restockHidden').value = document.getElementById('restockCheck').checked ? 'on' : '';
   return true;
 }
+{% if retail_error_sale_id %}
+// Redisplaying a rejected retail refund submit — the line grid itself is
+// always built client-side from /api/sales/<id>/refundable-items (see
+// lookupRefundSale() above), so instead of duplicating that lookup
+// server-side, re-run it here and then refill each quantity input from
+// what was actually submitted.
+document.getElementById('refundSaleIdInput').value = {{ retail_error_sale_id|tojson }};
+lookupRefundSale().then(() => {
+  const restoreQty = {{ retail_error_quantities|tojson }};
+  restoreQty.forEach(([sid, qty]) => {
+    const inp = document.querySelector(`#refundLineList input[data-sale-item-id="${sid}"]`);
+    if (inp) inp.value = qty;
+  });
+  renderRefundTotal();
+});
+{% endif %}
 </script>
 {% endblock %}

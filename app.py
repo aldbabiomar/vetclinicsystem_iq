@@ -643,9 +643,30 @@ def pagination_url(page, page_param="page"):
     return url_for(request.endpoint, **args)
 
 
+def form_value(form, name, default=""):
+    """Looks up a field's just-submitted value from `form` (the raw
+    request.form MultiDict, passed to render_template only when re-showing
+    a form after a validation failure) so a rejected submit can redisplay
+    exactly what the person typed instead of a blank/stale field. `form` is
+    None on a normal GET (and on any render that isn't redisplaying a
+    rejected POST), in which case `default` (usually an existing record's
+    DB value, for an edit form) is used instead. Deliberately returns the
+    raw submitted string as-is — no int/float/Decimal parsing — so this is
+    safe to use for every field type without reintroducing a type-coercion
+    bug on a value that failed validation specifically because it wasn't a
+    valid number/date in the first place. Checked with a truthiness test
+    rather than `is None` because a template that never received a `form=`
+    kwarg at all (the normal GET-request case) gets Jinja2's Undefined
+    sentinel here, not Python None — and Undefined has no .get() method."""
+    if not form:
+        return default
+    return form.get(name, default)
+
+
 app.jinja_env.globals["pagination_url"] = pagination_url
 app.jinja_env.globals["has_permission"] = auth.has_permission
 app.jinja_env.globals["static_asset"] = static_asset
+app.jinja_env.globals["fv"] = form_value
 
 
 # ---------------------------------------------------------------------------
@@ -1523,7 +1544,7 @@ def owner_new():
             phone = normalize_phone(f.get("phone"))
         except BadPhone:
             flash("That phone number doesn't look valid — check the digits and try again.", "error")
-            return render_template("owner_form.html", owner=None)
+            return render_template("owner_form.html", owner=None, form=f)
         # Friendly fast-path — not the real guarantee (see the IntegrityError
         # catch below for that): an owner with this phone already on file
         # almost always means "add another pet to them", not "make a new
@@ -1554,7 +1575,7 @@ def owner_new():
                       f"add the pet to them instead of creating a new owner.", "error")
                 return redirect(url_for("owner_detail", owner_id=existing["id"]))
             flash("That phone number is already on file for another owner.", "error")
-            return render_template("owner_form.html", owner=None)
+            return render_template("owner_form.html", owner=None, form=f)
         flash(f"Owner {oid} added.", "success")
         return redirect(url_for("owner_detail", owner_id=oid))
     return render_template("owner_form.html", owner=None)
@@ -1586,7 +1607,7 @@ def owner_edit(owner_id):
             phone = normalize_phone(f.get("phone"))
         except BadPhone:
             flash("That phone number doesn't look valid — check the digits and try again.", "error")
-            return redirect(url_for("owner_edit", owner_id=owner_id))
+            return render_template("owner_form.html", owner=owner, form=f)
         new_vals = {"name": f["name"], "phone": phone, "address": f.get("address"), "notes": f.get("notes")}
         changes = auth.diff_dict(owner, new_vals)
         db.execute("UPDATE owners SET name=?, phone=?, address=?, notes=? WHERE id=?",
@@ -1768,17 +1789,22 @@ def visit_new_existing():
     db = get_db()
     if request.method == "POST":
         patient_id = request.form.get("patient_id", "").strip()
-        if not patient_id or not db.execute("SELECT 1 FROM patients WHERE id=?", (patient_id,)).fetchone():
+        patient_row = db.execute(
+            "SELECT p.animal_name, o.name as owner_name FROM patients p JOIN owners o ON o.id=p.owner_id WHERE p.id=?",
+            (patient_id,),
+        ).fetchone() if patient_id else None
+        if not patient_id or not patient_row:
             flash("Pick a patient from the search results before logging a visit.", "error")
             return redirect(url_for("visit_new_existing"))
         try:
             vid = _create_visit(db, patient_id, request.form)
-        except BadDate as e:
-            flash(str(e), "error")
-            return redirect(url_for("visit_new_existing"))
-        except BadNumber:
-            flash("Weight and BCS must be valid numbers.", "error")
-            return redirect(url_for("visit_new_existing"))
+        except (BadDate, BadNumber) as e:
+            flash(str(e) if isinstance(e, BadDate) else "Weight and BCS must be valid numbers.", "error")
+            return render_template(
+                "visit_new_existing.html", vets=vet_users(db), wellness_types=WELLNESS_TYPES,
+                grooming_services=GROOMING_SERVICES, form=request.form, selected_patient_id=patient_id,
+                selected_patient_label=f"{patient_row['animal_name']} — {patient_row['owner_name']} ({patient_id})",
+            )
         return redirect(url_for("visit_detail", visit_id=vid))
     return render_template("visit_new_existing.html", vets=vet_users(db), wellness_types=WELLNESS_TYPES,
                             grooming_services=GROOMING_SERVICES)
@@ -1790,11 +1816,22 @@ def visit_new_patient():
     db = get_db()
     if request.method == "POST":
         f = request.form
+        def redisplay():
+            return render_template("visit_new_patient.html", vets=vet_users(db), wellness_types=WELLNESS_TYPES,
+                                    grooming_services=GROOMING_SERVICES, form=f)
         try:
             owner_phone = normalize_phone(f.get("owner_phone"))
         except BadPhone:
             flash("That owner phone number doesn't look valid — check the digits and try again.", "error")
-            return redirect(url_for("visit_new_patient"))
+            return redisplay()
+        try:
+            _parse_visit_fields(f)
+        except BadDate as e:
+            flash(str(e), "error")
+            return redisplay()
+        except BadNumber:
+            flash("Weight and BCS must be valid numbers.", "error")
+            return redisplay()
 
         # This form is meant for a genuinely new owner+pet — but nothing
         # stopped staff from re-entering an existing owner's exact
@@ -1834,17 +1871,36 @@ def visit_new_patient():
         auth.log_change(db, "patients", pid, "create")
         db.commit()
 
-        try:
-            vid = _create_visit(db, pid, f)
-        except BadDate as e:
-            flash(str(e), "error")
-            return redirect(url_for("visit_new_patient"))
-        except BadNumber:
-            flash("Weight and BCS must be valid numbers.", "error")
-            return redirect(url_for("visit_new_patient"))
+        # _parse_visit_fields(f) above already validated date/weight/bcs
+        # before the owner+patient writes/commit above, so this can no
+        # longer raise BadDate/BadNumber on a well-formed request.
+        vid = _create_visit(db, pid, f)
         return redirect(url_for("visit_detail", visit_id=vid))
     return render_template("visit_new_patient.html", vets=vet_users(db), wellness_types=WELLNESS_TYPES,
                             grooming_services=GROOMING_SERVICES)
+
+
+def _parse_visit_fields(f):
+    """Parses/validates the visit-level fields (date, weight, bcs, wellness
+    next-dose date), raising BadDate/BadNumber on bad input. Pure — no DB
+    writes. Split out of _create_visit() so a caller that must create
+    prerequisite records first (owner+patient, in visit_new_patient()) can
+    validate the visit fields BEFORE committing those, instead of
+    committing them and only then discovering the visit itself is invalid
+    (which used to leave an orphaned owner+patient behind — see
+    visit_new_patient())."""
+    visit_date = clean_date(f.get("date"), field="date") or date.today().isoformat()
+    wellness_needed = f.get("wellness_needed", "N")
+    grooming_needed = f.get("grooming_needed", "N")
+    weight_kg = parse_money(f.get("weight_kg"))
+    bcs = parse_int(f.get("bcs"))
+    if has_negative(weight_kg):
+        raise BadNumber(f.get("weight_kg"))
+    wellness_next_dose_date = (
+        clean_date(f.get("wellness_next_dose_date"), field="wellness_next_dose_date")
+        if wellness_needed == "Y" else None
+    )
+    return visit_date, weight_kg, bcs, wellness_needed, grooming_needed, wellness_next_dose_date
 
 
 def _create_visit(db, patient_id, f):
@@ -1861,18 +1917,8 @@ def _create_visit(db, patient_id, f):
     """
     vid = dbmod.next_id(db, "V")
     admit_now = f.get("admit_inpatient") == "on"
-    visit_date = clean_date(f.get("date"), field="date") or date.today().isoformat()
-    wellness_needed = f.get("wellness_needed", "N")
-    grooming_needed = f.get("grooming_needed", "N")
+    visit_date, weight_kg, bcs, wellness_needed, grooming_needed, wellness_next_dose_date = _parse_visit_fields(f)
     grooming_services = ",".join(f.getlist("grooming_services")) if grooming_needed == "Y" else None
-    weight_kg = parse_money(f.get("weight_kg"))
-    bcs = parse_int(f.get("bcs"))
-    if has_negative(weight_kg):
-        raise BadNumber(f.get("weight_kg"))
-    wellness_next_dose_date = (
-        clean_date(f.get("wellness_next_dose_date"), field="wellness_next_dose_date")
-        if wellness_needed == "Y" else None
-    )
 
     db.execute(
         """INSERT INTO visits (id,patient_id,visit_type,date,doctor,weight_kg,bcs,complaint,history,exam,treatment,
@@ -1957,24 +2003,30 @@ def visits_list():
                             page=page, total_pages=page_count(total), total_count=total)
 
 
-@app.route("/visits/<visit_id>")
-@auth.permission_required("manage_visits")
-def visit_detail(visit_id):
-    db = get_db()
+def _visit_detail_context(db, visit_id):
     visit = db.execute(
         "SELECT v.*, p.animal_name, p.id as patient_id, o.name as owner_name, o.phone as owner_phone FROM visits v "
         "JOIN patients p ON p.id=v.patient_id JOIN owners o ON o.id=p.owner_id WHERE v.id=?", (visit_id,)
     ).fetchone()
     if not visit:
-        flash("Visit not found.", "error")
-        return redirect(url_for("visits_list"))
+        return None
     billing_row = db.execute("SELECT * FROM billing WHERE visit_id=?", (visit_id,)).fetchone()
     summary = logic.visit_billing_summary(db, visit_id)
     payments = db.execute("SELECT * FROM payments WHERE visit_id=? ORDER BY date DESC", (visit_id,)).fetchall()
     files = attach_mod.list_attachments(db, "visit", visit_id)
     cap = auth.discount_cap_for(db)
-    return render_template("visit_detail.html", visit=visit, billing=billing_row, summary=summary,
-                            payments=payments, files=files, discount_cap=cap)
+    return dict(visit=visit, billing=billing_row, summary=summary, payments=payments, files=files, discount_cap=cap)
+
+
+@app.route("/visits/<visit_id>")
+@auth.permission_required("manage_visits")
+def visit_detail(visit_id):
+    db = get_db()
+    ctx = _visit_detail_context(db, visit_id)
+    if ctx is None:
+        flash("Visit not found.", "error")
+        return redirect(url_for("visits_list"))
+    return render_template("visit_detail.html", **ctx)
 
 
 @app.route("/visits/<visit_id>/edit", methods=["GET", "POST"])
@@ -1987,6 +2039,12 @@ def visit_edit(visit_id):
         return redirect(url_for("visits_list"))
     if request.method == "POST":
         f = request.form
+
+        def redisplay():
+            return render_template("visit_form_edit.html", visit=visit, case_statuses=CASE_STATUSES,
+                                    followup_reasons=FOLLOWUP_REASONS, wellness_types=WELLNESS_TYPES,
+                                    grooming_services=GROOMING_SERVICES, vets=vet_users(db), form=f)
+
         conflict = stale_edit_error(visit["updated_at"], f.get("expected_updated_at"), "visit")
         if conflict:
             flash(conflict, "error")
@@ -2007,13 +2065,13 @@ def visit_edit(visit_id):
             edited_bcs = parse_int(f.get("bcs"))
         except BadDate as e:
             flash(str(e), "error")
-            return redirect(url_for("visit_edit", visit_id=visit_id))
+            return redisplay()
         except BadNumber:
             flash("Weight and BCS must be valid numbers.", "error")
-            return redirect(url_for("visit_edit", visit_id=visit_id))
+            return redisplay()
         if has_negative(edited_weight_kg):
             flash("Weight can't be negative.", "error")
-            return redirect(url_for("visit_edit", visit_id=visit_id))
+            return redisplay()
 
         new_vals = {
             "visit_type": f.get("visit_type"), "date": edited_date, "doctor": f.get("doctor"),
@@ -2065,10 +2123,27 @@ def visit_edit(visit_id):
 def visit_billing_save(visit_id):
     db = get_db()
     f = request.form
+
+    # This form's "Automatic" mode is a JS-built cart (price_id/qty_{id}
+    # hidden fields injected client-side — see visit_detail.html), not a
+    # simple field list. Restoring that cart's contents on a server-side
+    # redisplay would mean re-deriving each line's name/price from the DB
+    # and re-hydrating the cart-builder JS's own state, disproportionate
+    # effort for this pass (same scoping call made for pos_checkout()).
+    # redisplay() below still preserves every plain top-level field
+    # (billing type, manual amount, date, notes) — strictly better than
+    # today's full-blank redirect, just not a full cart restore.
+    def redisplay():
+        ctx = _visit_detail_context(db, visit_id)
+        if ctx is None:
+            flash("Visit not found.", "error")
+            return redirect(url_for("visits_list"))
+        return render_template("visit_detail.html", **ctx, form=f)
+
     billing_type = f.get("billing_type", "Automatic")
     if billing_type not in BILLING_TYPES:
         flash("Billing type must be one of: " + ", ".join(BILLING_TYPES) + ".", "error")
-        return redirect(url_for("visit_detail", visit_id=visit_id))
+        return redisplay()
     priced_lines = []
     had_bad_number = had_bad_price = False
     if billing_type == "Automatic":
@@ -2118,15 +2193,15 @@ def visit_billing_save(visit_id):
         manual_amount = parse_money(f.get("manual_amount")) if billing_type == "Manual" else None
     except BadNumber:
         flash("Manual amount must be a valid number.", "error")
-        return redirect(url_for("visit_detail", visit_id=visit_id))
+        return redisplay()
     if billing_type == "Manual" and (manual_amount is None or manual_amount <= 0):
         flash("Manual Entry requires a Billed Amount greater than 0.", "error")
-        return redirect(url_for("visit_detail", visit_id=visit_id))
+        return redisplay()
     try:
         date_billed = clean_date(f.get("date_billed"), field="date_billed")
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("visit_detail", visit_id=visit_id))
+        return redisplay()
     notes = f.get("notes")
     existing = db.execute("SELECT * FROM billing WHERE visit_id=?", (visit_id,)).fetchone()
     old_month = logic.month_key(existing["date_billed"]) if existing else None
@@ -2169,22 +2244,31 @@ def visit_billing_save(visit_id):
 @auth.permission_required("manage_visits")
 def visit_discount_save(visit_id):
     db = get_db()
+    f = request.form
+
+    def redisplay():
+        ctx = _visit_detail_context(db, visit_id)
+        if ctx is None:
+            flash("Visit not found.", "error")
+            return redirect(url_for("visits_list"))
+        return render_template("visit_detail.html", **ctx, form=f, discount_error=True)
+
     try:
-        percent = parse_money(request.form.get("discount_percent")) or 0
+        percent = parse_money(f.get("discount_percent")) or 0
     except BadNumber:
         flash("Discount must be a valid number.", "error")
-        return redirect(url_for("visit_detail", visit_id=visit_id))
+        return redisplay()
     cap = auth.discount_cap_for(db)
     error = discount_percent_error(percent, cap)
     if error:
         flash(error, "error")
-        return redirect(url_for("visit_detail", visit_id=visit_id))
+        return redisplay()
     if percent > 0:
         summary = logic.visit_billing_summary(db, visit_id)
         blocked = logic.non_discountable_line_names(db, [l["id"] for l in summary["lines"]])
         if blocked:
             flash(f"Can't apply a discount — this bill includes item(s) marked as not discountable: {', '.join(blocked)}.", "error")
-            return redirect(url_for("visit_detail", visit_id=visit_id))
+            return redisplay()
     existing = db.execute("SELECT * FROM billing WHERE visit_id=?", (visit_id,)).fetchone()
     # Same UPSERT reasoning as visit_billing_save() — visit_id is billing's
     # primary key, so a plain SELECT-then-branch here is racy the same way.
@@ -2208,6 +2292,14 @@ def visit_discount_save(visit_id):
 def visit_payment_add(visit_id):
     db = get_db()
     f = request.form
+
+    def redisplay():
+        ctx = _visit_detail_context(db, visit_id)
+        if ctx is None:
+            flash("Visit not found.", "error")
+            return redirect(url_for("visits_list"))
+        return render_template("visit_detail.html", **ctx, form=f, payment_error=True)
+
     # Locked before computing the balance, same reasoning as
     # distributor_payment_new()/boarding_payment() — without this, two
     # near-simultaneous payments against the same visit could each read
@@ -2220,19 +2312,19 @@ def visit_payment_add(visit_id):
         amount = parse_money(f.get("amount"), required=True)
     except BadNumber:
         flash("Payment amount must be a valid number.", "error")
-        return redirect(url_for("visit_detail", visit_id=visit_id))
+        return redisplay()
     if amount <= 0:
         flash("Payment amount must be greater than 0.", "error")
-        return redirect(url_for("visit_detail", visit_id=visit_id))
+        return redisplay()
     balance = logic.visit_billing_summary(db, visit_id)["balance"]
     if amount > balance + 1e-9:
         flash(f"That's more than the remaining balance of {logic.fmt_money(balance)} IQD on this visit.", "error")
-        return redirect(url_for("visit_detail", visit_id=visit_id))
+        return redisplay()
     try:
         payment_date = clean_date(f.get("date"), field="date") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("visit_detail", visit_id=visit_id))
+        return redisplay()
     cur = db.execute(
         "INSERT INTO payments (visit_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?) RETURNING id",
         (visit_id, amount, f.get("method"), payment_date, session["user_id"], f.get("notes")),
@@ -2422,10 +2514,7 @@ def grooming_update(visit_id):
 PRICE_CATEGORIES = ["Service", "Medicine", "Retail"]
 
 
-@app.route("/price-list")
-@auth.permission_required("manage_price_list")
-def price_list():
-    db = get_db()
+def _price_list_context(db):
     cat = request.args.get("category")
     search = request.args.get("q", "").strip()
     page = get_page()
@@ -2443,9 +2532,16 @@ def price_list():
     rows = db.execute(q, params + [PER_PAGE, page_offset(page)]).fetchall()
     inv_items = db.execute("SELECT id, name, cost_price FROM inventory_list WHERE active=true AND category='Retail' ORDER BY name").fetchall()
     flagged_price, _ = logic.retail_consistency_flags(db)
-    return render_template("price_list.html", items=rows, categories=PRICE_CATEGORIES, active_cat=cat,
-                            inv_items=inv_items, search=search, flagged_price=flagged_price,
-                            page=page, total_pages=page_count(total), total_count=total)
+    return dict(items=rows, categories=PRICE_CATEGORIES, active_cat=cat,
+                inv_items=inv_items, search=search, flagged_price=flagged_price,
+                page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/price-list")
+@auth.permission_required("manage_price_list")
+def price_list():
+    db = get_db()
+    return render_template("price_list.html", **_price_list_context(db))
 
 
 @app.route("/price-list/new", methods=["POST"])
@@ -2453,18 +2549,22 @@ def price_list():
 def price_list_new():
     db = get_db()
     f = request.form
+
+    def redisplay():
+        return render_template("price_list.html", **_price_list_context(db), form=f, show_new_form=True)
+
     try:
         cost_price = parse_money(f.get("cost_price"))
         sale_price = parse_money(f.get("sale_price"))
     except BadNumber:
         flash("Cost Price and Sale Price must be valid numbers.", "error")
-        return redirect(url_for("price_list"))
+        return redisplay()
     if has_negative(cost_price, sale_price):
         flash("Cost Price and Sale Price can't be negative.", "error")
-        return redirect(url_for("price_list"))
+        return redisplay()
     if f.get("category") not in PRICE_CATEGORIES:
         flash("Category must be one of: " + ", ".join(PRICE_CATEGORIES) + ".", "error")
-        return redirect(url_for("price_list"))
+        return redisplay()
     linked_item_id = f.get("linked_item_id") or None
     if linked_item_id:
         existing_link = db.execute(
@@ -2478,7 +2578,7 @@ def price_list_new():
         if existing_link:
             flash(f"That inventory item is already linked to {existing_link['id']} ({existing_link['name']}) — "
                   f"an item can only be linked from one active Price List row at a time.", "error")
-            return redirect(url_for("price_list"))
+            return redisplay()
     pid = dbmod.next_id(db, "P")
     can_discount = f.get("can_discount") == "on"
     db.execute(
@@ -2573,18 +2673,22 @@ def price_list_bulk_edit():
 def price_list_edit(item_id):
     db = get_db()
     f = request.form
+
+    def redisplay():
+        return render_template("price_list.html", **_price_list_context(db), form=f, edit_error_id=item_id)
+
     try:
         cost_price = parse_money(f.get("cost_price"))
         sale_price = parse_money(f.get("sale_price"))
     except BadNumber:
         flash("Cost Price and Sale Price must be valid numbers.", "error")
-        return redirect(url_for("price_list"))
+        return redisplay()
     if has_negative(cost_price, sale_price):
         flash("Cost Price and Sale Price can't be negative.", "error")
-        return redirect(url_for("price_list"))
+        return redisplay()
     if f.get("category") not in PRICE_CATEGORIES:
         flash("Category must be one of: " + ", ".join(PRICE_CATEGORIES) + ".", "error")
-        return redirect(url_for("price_list"))
+        return redisplay()
     old = db.execute("SELECT * FROM price_list WHERE id=?", (item_id,)).fetchone()
     if not old:
         flash("Price list item not found.", "error")
@@ -2598,7 +2702,7 @@ def price_list_edit(item_id):
         if dup:
             flash(f"That inventory item is already linked to {dup['id']} ({dup['name']}) — "
                   f"an item can only be linked from one active Price List row at a time.", "error")
-            return redirect(url_for("price_list"))
+            return redisplay()
     new_vals = {"name": f["name"], "category": f["category"], "cost_price": cost_price,
                 "sale_price": sale_price, "notes": f.get("notes"),
                 "linked_item_id": new_linked_item_id,
@@ -2645,10 +2749,7 @@ APPOINTMENT_TYPES = ["Medical", "Grooming"]
 BILLING_TYPES = ["Automatic", "Manual"]
 
 
-@app.route("/inventory-catalog")
-@auth.permission_required("manage_inventory_catalog")
-def inventory_catalog():
-    db = get_db()
+def _inventory_catalog_context(db):
     show_inactive = request.args.get("inactive") == "1"
     search = request.args.get("q", "").strip()
     page = get_page()
@@ -2669,10 +2770,17 @@ def inventory_catalog():
     has_generated_barcodes = db.execute(
         "SELECT EXISTS(SELECT 1 FROM inventory_list WHERE barcode_source='generated' AND active=true) AS e"
     ).fetchone()["e"]
-    return render_template("inventory_catalog.html", items=rows, distributors=distributors,
-                            show_inactive=show_inactive, categories=INVENTORY_CATEGORIES, search=search,
-                            flagged_inventory=flagged_inventory, has_generated_barcodes=has_generated_barcodes,
-                            page=page, total_pages=page_count(total), total_count=total)
+    return dict(items=rows, distributors=distributors,
+                show_inactive=show_inactive, categories=INVENTORY_CATEGORIES, search=search,
+                flagged_inventory=flagged_inventory, has_generated_barcodes=has_generated_barcodes,
+                page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/inventory-catalog")
+@auth.permission_required("manage_inventory_catalog")
+def inventory_catalog():
+    db = get_db()
+    return render_template("inventory_catalog.html", **_inventory_catalog_context(db))
 
 
 @app.route("/inventory-catalog/new", methods=["POST"])
@@ -2680,17 +2788,21 @@ def inventory_catalog():
 def inventory_catalog_new():
     db = get_db()
     f = request.form
+
+    def redisplay():
+        return render_template("inventory_catalog.html", **_inventory_catalog_context(db), form=f, show_new_form=True)
+
     try:
         cost_price = parse_money(f.get("cost_price"))
     except BadNumber:
         flash("Cost Price must be a valid number.", "error")
-        return redirect(url_for("inventory_catalog"))
+        return redisplay()
     if has_negative(cost_price):
         flash("Cost Price can't be negative.", "error")
-        return redirect(url_for("inventory_catalog"))
+        return redisplay()
     if f.get("category", "Medical") not in INVENTORY_CATEGORIES:
         flash("Category must be one of: " + ", ".join(INVENTORY_CATEGORIES) + ".", "error")
-        return redirect(url_for("inventory_catalog"))
+        return redisplay()
     iid = dbmod.next_id(db, "INV")
     db.execute(
         "INSERT INTO inventory_list (id,name,category,unit,track_expiry,cost_price,distributor_id,active,notes) "
@@ -2762,17 +2874,21 @@ def inventory_catalog_bulk_edit():
 def inventory_catalog_edit(item_id):
     db = get_db()
     f = request.form
+
+    def redisplay():
+        return render_template("inventory_catalog.html", **_inventory_catalog_context(db), form=f, edit_error_id=item_id)
+
     try:
         cost_price = parse_money(f.get("cost_price"))
     except BadNumber:
         flash("Cost Price must be a valid number.", "error")
-        return redirect(url_for("inventory_catalog"))
+        return redisplay()
     if has_negative(cost_price):
         flash("Cost Price can't be negative.", "error")
-        return redirect(url_for("inventory_catalog"))
+        return redisplay()
     if f.get("category", "Medical") not in INVENTORY_CATEGORIES:
         flash("Category must be one of: " + ", ".join(INVENTORY_CATEGORIES) + ".", "error")
-        return redirect(url_for("inventory_catalog"))
+        return redisplay()
     old = db.execute("SELECT * FROM inventory_list WHERE id=?", (item_id,)).fetchone()
     new_vals = {"name": f["name"], "category": f.get("category", "Medical"), "unit": f.get("unit"),
                 "track_expiry": f.get("track_expiry") == "on", "cost_price": cost_price,
@@ -3001,19 +3117,21 @@ def inventory_catalog_barcodes_bulk_print():
 # ---------------------------------------------------------------------------
 # Distributors
 # ---------------------------------------------------------------------------
-@app.route("/distributors")
-@auth.permission_required("manage_distributors")
-def distributors_list():
-    db = get_db()
-    search = request.args.get("q", "").strip()
+def _distributors_list_context(db, search):
     if search:
         rows = db.execute("SELECT * FROM distributors WHERE name ILIKE ? ORDER BY name", (f"%{search}%",)).fetchall()
     else:
         rows = db.execute("SELECT * FROM distributors ORDER BY name").fetchall()
     outstanding = logic.distributor_outstanding_totals(db)
     payables = logic.distributor_payables_summary(db)
-    return render_template("distributors.html", distributors=rows, search=search,
-                            outstanding=outstanding, payables=payables)
+    return dict(distributors=rows, search=search, outstanding=outstanding, payables=payables)
+
+
+@app.route("/distributors")
+@auth.permission_required("manage_distributors")
+def distributors_list():
+    db = get_db()
+    return render_template("distributors.html", **_distributors_list_context(db, request.args.get("q", "").strip()))
 
 
 @app.route("/distributors/new", methods=["POST"])
@@ -3021,16 +3139,20 @@ def distributors_list():
 def distributor_new():
     db = get_db()
     f = request.form
+
+    def redisplay():
+        return render_template("distributors.html", **_distributors_list_context(db, ""), form=f, show_new_form=True)
+
     try:
         phone = normalize_phone(f.get("phone"))
     except BadPhone:
         flash("That phone number doesn't look valid — check the digits and try again.", "error")
-        return redirect(url_for("distributors_list"))
+        return redisplay()
     try:
         lead_time_days = parse_int(f.get("lead_time_days"))
     except BadNumber:
         flash("Lead Time (Days) must be a whole number.", "error")
-        return redirect(url_for("distributors_list"))
+        return redisplay()
     did = dbmod.next_id(db, "D")
     db.execute(
         "INSERT INTO distributors (id,name,contact_person,phone,email,catalog_link,lead_time_days,payment_terms,notes) "
@@ -3049,16 +3171,20 @@ def distributor_new():
 def distributor_edit(dist_id):
     db = get_db()
     f = request.form
+
+    def redisplay():
+        return render_template("distributors.html", **_distributors_list_context(db, ""), form=f, edit_error_id=dist_id)
+
     try:
         phone = normalize_phone(f.get("phone"))
     except BadPhone:
         flash("That phone number doesn't look valid — check the digits and try again.", "error")
-        return redirect(url_for("distributors_list"))
+        return redisplay()
     try:
         lead_time_days = parse_int(f.get("lead_time_days"))
     except BadNumber:
         flash("Lead Time (Days) must be a whole number.", "error")
-        return redirect(url_for("distributors_list"))
+        return redisplay()
     old = db.execute("SELECT * FROM distributors WHERE id=?", (dist_id,)).fetchone()
     new_vals = {"name": f["name"], "contact_person": f.get("contact_person"), "phone": phone,
                 "email": f.get("email"), "catalog_link": f.get("catalog_link"),
@@ -3113,15 +3239,22 @@ def distributor_delete(dist_id):
 # POS, or any report; balance/status are always computed (never stored).
 # Reuses manage_distributors — no new permission for this.
 # ---------------------------------------------------------------------------
+def _distributor_detail_context(db, dist_id):
+    dist = db.execute("SELECT * FROM distributors WHERE id=?", (dist_id,)).fetchone()
+    if not dist:
+        return None
+    ledger = logic.distributor_ledger(db, dist_id)
+    return dict(distributor=dist, payment_methods=PAYMENT_METHODS, today=date.today().isoformat(), **ledger)
+
+
 @app.route("/distributors/<dist_id>")
 @auth.permission_required("manage_distributors")
 def distributor_detail(dist_id):
     db = get_db()
-    dist = db.execute("SELECT * FROM distributors WHERE id=?", (dist_id,)).fetchone()
-    if not dist:
+    ctx = _distributor_detail_context(db, dist_id)
+    if ctx is None:
         abort(404)
-    ledger = logic.distributor_ledger(db, dist_id)
-    return render_template("distributor_detail.html", distributor=dist, payment_methods=PAYMENT_METHODS, **ledger)
+    return render_template("distributor_detail.html", **ctx)
 
 
 @app.route("/distributors/<dist_id>/bills/new", methods=["POST"])
@@ -3129,19 +3262,26 @@ def distributor_detail(dist_id):
 def distributor_bill_new(dist_id):
     db = get_db()
     f = request.form
+
+    def redisplay():
+        ctx = _distributor_detail_context(db, dist_id)
+        if ctx is None:
+            abort(404)
+        return render_template("distributor_detail.html", **ctx, form=f, show_new_bill_form=True)
+
     try:
         total_amount = parse_money(f.get("total_amount"), required=True)
     except BadNumber:
         flash("Total amount must be a valid number.", "error")
-        return redirect(url_for("distributor_detail", dist_id=dist_id))
+        return redisplay()
     if total_amount <= 0:
         flash("Total amount must be greater than zero.", "error")
-        return redirect(url_for("distributor_detail", dist_id=dist_id))
+        return redisplay()
     try:
         bill_date = clean_date(f.get("bill_date"), field="bill_date") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("distributor_detail", dist_id=dist_id))
+        return redisplay()
     bid = dbmod.next_id(db, "DB")
     db.execute(
         "INSERT INTO distributor_bills (id,distributor_id,bill_date,bill_reference,total_amount,notes,created_at,created_by) "
@@ -3180,6 +3320,13 @@ def distributor_bill_delete(dist_id, bill_id):
 def distributor_payment_new(dist_id, bill_id):
     db = get_db()
     f = request.form
+
+    def redisplay():
+        ctx = _distributor_detail_context(db, dist_id)
+        if ctx is None:
+            abort(404)
+        return render_template("distributor_detail.html", **ctx, form=f, payment_error_bill_id=bill_id)
+
     # Locked before computing the balance, same reasoning as
     # pos_checkout()'s cart-item locking: without this, two payments each
     # individually within the balance shown at page-load could both pass
@@ -3194,10 +3341,10 @@ def distributor_payment_new(dist_id, bill_id):
         amount = parse_money(f.get("amount"), required=True)
     except BadNumber:
         flash("Payment amount must be a valid number.", "error")
-        return redirect(url_for("distributor_detail", dist_id=dist_id))
+        return redisplay()
     if amount <= 0:
         flash("Payment amount must be greater than zero.", "error")
-        return redirect(url_for("distributor_detail", dist_id=dist_id))
+        return redisplay()
     paid_so_far = db.execute(
         "SELECT COALESCE(SUM(amount),0) s FROM distributor_bill_payments WHERE bill_id=?", (bill_id,)
     ).fetchone()["s"]
@@ -3210,12 +3357,12 @@ def distributor_payment_new(dist_id, bill_id):
     # overpayment/credit happened.
     if amount > balance + 1e-9:
         flash(f"That's more than the remaining balance of {logic.fmt_money(balance)} IQD on this bill.", "error")
-        return redirect(url_for("distributor_detail", dist_id=dist_id))
+        return redisplay()
     try:
         payment_date = clean_date(f.get("payment_date"), field="payment_date") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("distributor_detail", dist_id=dist_id))
+        return redisplay()
     cur = db.execute(
         "INSERT INTO distributor_bill_payments (bill_id,amount,payment_date,method,notes,created_at,created_by) "
         "VALUES (?,?,?,?,?,?,?) RETURNING id",
@@ -3394,20 +3541,22 @@ def _consignment_item_choices(db):
     ).fetchall()
 
 
-@app.route("/consignment/receiving")
-@auth.permission_required("view_consignment")
-def consignment_receiving_page():
-    db = get_db()
-    page = get_page()
+def _consignment_receiving_context(db, page):
     total = db.execute("SELECT COUNT(*) c FROM consignment_receipts").fetchone()["c"]
     rows = db.execute(
         "SELECT cr.*, i.name AS item_name, d.name AS distributor_name FROM consignment_receipts cr "
         "JOIN inventory_list i ON i.id=cr.item_id JOIN distributors d ON d.id=cr.distributor_id "
         "ORDER BY cr.created_at DESC LIMIT ? OFFSET ?", (PER_PAGE, page_offset(page)),
     ).fetchall()
-    return render_template("consignment_receiving.html", receipts=rows, items=_consignment_item_choices(db),
-                            today=date.today().isoformat(),
-                            page=page, total_pages=page_count(total), total_count=total)
+    return dict(receipts=rows, items=_consignment_item_choices(db), today=date.today().isoformat(),
+                page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/consignment/receiving")
+@auth.permission_required("view_consignment")
+def consignment_receiving_page():
+    db = get_db()
+    return render_template("consignment_receiving.html", **_consignment_receiving_context(db, get_page()))
 
 
 @app.route("/consignment/receiving/new", methods=["POST"])
@@ -3415,28 +3564,33 @@ def consignment_receiving_page():
 def consignment_receiving_new():
     db = get_db()
     f = request.form
+
+    def redisplay():
+        return render_template("consignment_receiving.html", **_consignment_receiving_context(db, get_page()),
+                                form=f, show_new_form=True)
+
     item_id = f.get("item_id")
     item = db.execute("SELECT * FROM inventory_list WHERE id=? AND ownership_type='Consignment'", (item_id,)).fetchone()
     if not item:
         flash("Pick a Consignment item first.", "error")
-        return redirect(url_for("consignment_receiving_page"))
+        return redisplay()
     try:
         quantity = parse_money(f.get("quantity"), required=True)
         unit_cost = parse_money(f.get("unit_cost"), required=True)
     except BadNumber:
         flash("Quantity and Unit Cost must be valid numbers.", "error")
-        return redirect(url_for("consignment_receiving_page"))
+        return redisplay()
     if quantity <= 0:
         flash("Quantity must be greater than 0.", "error")
-        return redirect(url_for("consignment_receiving_page"))
+        return redisplay()
     if has_negative(unit_cost):
         flash("Unit Cost can't be negative.", "error")
-        return redirect(url_for("consignment_receiving_page"))
+        return redisplay()
     try:
         received_date = clean_date(f.get("received_date"), field="received_date") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("consignment_receiving_page"))
+        return redisplay()
     logic.record_consignment_receipt(db, item_id, item["distributor_id"], quantity, unit_cost,
                                       received_date, f.get("delivery_reference"), f.get("notes"), session["user_id"])
     auth.log_change(db, "consignment_receipts", item_id, "create")
@@ -3445,19 +3599,22 @@ def consignment_receiving_new():
     return redirect(url_for("consignment_receiving_page"))
 
 
-@app.route("/consignment/shrinkage")
-@auth.permission_required("view_consignment")
-def consignment_shrinkage_page():
-    db = get_db()
-    page = get_page()
+def _consignment_shrinkage_context(db, page):
     total = db.execute("SELECT COUNT(*) c FROM consignment_shrinkage").fetchone()["c"]
     rows = db.execute(
         "SELECT cs.*, i.name AS item_name, d.name AS distributor_name FROM consignment_shrinkage cs "
         "JOIN inventory_list i ON i.id=cs.item_id JOIN distributors d ON d.id=cs.distributor_id "
         "ORDER BY cs.logged_at DESC LIMIT ? OFFSET ?", (PER_PAGE, page_offset(page)),
     ).fetchall()
-    return render_template("consignment_shrinkage.html", lines=rows, items=_consignment_item_choices(db),
-                            page=page, total_pages=page_count(total), total_count=total)
+    return dict(lines=rows, items=_consignment_item_choices(db),
+                page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/consignment/shrinkage")
+@auth.permission_required("view_consignment")
+def consignment_shrinkage_page():
+    db = get_db()
+    return render_template("consignment_shrinkage.html", **_consignment_shrinkage_context(db, get_page()))
 
 
 @app.route("/consignment/shrinkage/new", methods=["POST"])
@@ -3465,23 +3622,28 @@ def consignment_shrinkage_page():
 def consignment_shrinkage_new():
     db = get_db()
     f = request.form
+
+    def redisplay():
+        return render_template("consignment_shrinkage.html", **_consignment_shrinkage_context(db, get_page()),
+                                form=f, show_new_form=True)
+
     item_id = f.get("item_id")
     item = db.execute("SELECT * FROM inventory_list WHERE id=? AND ownership_type='Consignment'", (item_id,)).fetchone()
     if not item:
         flash("Pick a Consignment item first.", "error")
-        return redirect(url_for("consignment_shrinkage_page"))
+        return redisplay()
     try:
         quantity = parse_money(f.get("quantity"), required=True)
     except BadNumber:
         flash("Quantity must be a valid number.", "error")
-        return redirect(url_for("consignment_shrinkage_page"))
+        return redisplay()
     if quantity <= 0:
         flash("Quantity must be greater than 0.", "error")
-        return redirect(url_for("consignment_shrinkage_page"))
+        return redisplay()
     reason = f.get("reason")
     if reason not in ("Damaged", "Expired", "Other"):
         flash("Reason must be Damaged, Expired, or Other.", "error")
-        return redirect(url_for("consignment_shrinkage_page"))
+        return redisplay()
     # Default liability by reason (§9): Expired defaults to Distributor
     # (bad stock rotation on their end), Damaged/Other default to Clinic
     # (mishandled on-site) — either can be overridden per line.
@@ -3489,7 +3651,7 @@ def consignment_shrinkage_new():
     liable_party = f.get("liable_party") or default_liable
     if liable_party not in ("Distributor", "Clinic"):
         flash("Liable Party must be Distributor or Clinic.", "error")
-        return redirect(url_for("consignment_shrinkage_page"))
+        return redisplay()
     overridden = liable_party != default_liable
     ok, _, error = logic.record_consignment_shrinkage(
         db, item_id, item["distributor_id"], quantity, reason, liable_party, overridden,
@@ -3497,27 +3659,29 @@ def consignment_shrinkage_new():
     )
     if not ok:
         flash(error, "error")
-        return redirect(url_for("consignment_shrinkage_page"))
+        return redisplay()
     auth.log_change(db, "consignment_shrinkage", item_id, "create")
     db.commit()
     flash(f"Logged {quantity:g} {item['name']} as shrinkage ({liable_party} liable).", "success")
     return redirect(url_for("consignment_shrinkage_page"))
 
 
-@app.route("/consignment/returns")
-@auth.permission_required("view_consignment")
-def consignment_returns_page():
-    db = get_db()
-    page = get_page()
+def _consignment_returns_context(db, page):
     total = db.execute("SELECT COUNT(*) c FROM consignment_returns").fetchone()["c"]
     rows = db.execute(
         "SELECT cr.*, i.name AS item_name, d.name AS distributor_name FROM consignment_returns cr "
         "JOIN inventory_list i ON i.id=cr.item_id JOIN distributors d ON d.id=cr.distributor_id "
         "ORDER BY cr.created_at DESC LIMIT ? OFFSET ?", (PER_PAGE, page_offset(page)),
     ).fetchall()
-    return render_template("consignment_returns.html", returns=rows, items=_consignment_item_choices(db),
-                            today=date.today().isoformat(),
-                            page=page, total_pages=page_count(total), total_count=total)
+    return dict(returns=rows, items=_consignment_item_choices(db), today=date.today().isoformat(),
+                page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/consignment/returns")
+@auth.permission_required("view_consignment")
+def consignment_returns_page():
+    db = get_db()
+    return render_template("consignment_returns.html", **_consignment_returns_context(db, get_page()))
 
 
 @app.route("/consignment/returns/new", methods=["POST"])
@@ -3525,30 +3689,35 @@ def consignment_returns_page():
 def consignment_returns_new():
     db = get_db()
     f = request.form
+
+    def redisplay():
+        return render_template("consignment_returns.html", **_consignment_returns_context(db, get_page()),
+                                form=f, show_new_form=True)
+
     item_id = f.get("item_id")
     item = db.execute("SELECT * FROM inventory_list WHERE id=? AND ownership_type='Consignment'", (item_id,)).fetchone()
     if not item:
         flash("Pick a Consignment item first.", "error")
-        return redirect(url_for("consignment_returns_page"))
+        return redisplay()
     try:
         quantity = parse_money(f.get("quantity"), required=True)
     except BadNumber:
         flash("Quantity must be a valid number.", "error")
-        return redirect(url_for("consignment_returns_page"))
+        return redisplay()
     if quantity <= 0:
         flash("Quantity must be greater than 0.", "error")
-        return redirect(url_for("consignment_returns_page"))
+        return redisplay()
     try:
         return_date = clean_date(f.get("return_date"), field="return_date") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("consignment_returns_page"))
+        return redisplay()
     ok, _, error = logic.record_consignment_return(
         db, item_id, item["distributor_id"], quantity, return_date, f.get("reason"), f.get("notes"), session["user_id"],
     )
     if not ok:
         flash(error, "error")
-        return redirect(url_for("consignment_returns_page"))
+        return redisplay()
     auth.log_change(db, "consignment_returns", item_id, "create")
     db.commit()
     flash(f"Returned {quantity:g} {item['name']} to {item['distributor_id']}.", "success")
@@ -3597,6 +3766,19 @@ def consignment_settlements_page(distributor_id):
 @auth.permission_required("manage_consignment_settlements")
 def consignment_settlement_new(distributor_id):
     db = get_db()
+    f = request.form
+
+    def redisplay():
+        distributor_row = db.execute("SELECT * FROM distributors WHERE id=?", (distributor_id,)).fetchone()
+        balance_row = logic.consignment_balance(db, distributor_id)
+        history_rows = db.execute(
+            "SELECT s.*, u.full_name AS settled_by_name FROM consignment_settlements s "
+            "LEFT JOIN users u ON u.id=s.settled_by WHERE s.distributor_id=? ORDER BY s.created_at DESC",
+            (distributor_id,),
+        ).fetchall()
+        return render_template("consignment_settlements.html", distributor=distributor_row, balance=balance_row,
+                                history=history_rows, payment_methods=PAYMENT_METHODS, form=f)
+
     # Locked before computing the balance — consignment_balance() reads
     # whatever settlement was most recently committed as its starting
     # point, so without this, two near-simultaneous submissions (double-
@@ -3620,13 +3802,13 @@ def consignment_settlement_new(distributor_id):
         amount_paid = parse_money(request.form.get("amount_paid"), required=True)
     except BadNumber:
         flash("Amount Paid must be a valid number.", "error")
-        return redirect(url_for("consignment_settlements_page", distributor_id=distributor_id))
+        return redisplay()
     if amount_paid < 0:
         flash("Amount Paid can't be negative.", "error")
-        return redirect(url_for("consignment_settlements_page", distributor_id=distributor_id))
+        return redisplay()
     if amount_paid > balance["amount_owed"] + 1e-9:
         flash(f"That's more than the {logic.fmt_money(balance['amount_owed'])} IQD owed for this period.", "error")
-        return redirect(url_for("consignment_settlements_page", distributor_id=distributor_id))
+        return redisplay()
     amount_paid = money.round_to_denomination(amount_paid)
     cur = db.execute(
         "INSERT INTO consignment_settlements (distributor_id, period_start, period_end, amount_owed, amount_paid, "
@@ -3711,15 +3893,11 @@ def audit_session_start():
     return redirect(url_for("audit_session_view", session_id=session_id))
 
 
-@app.route("/audit-history/session/<int:session_id>")
-@auth.permission_required("manage_audit_history")
-def audit_session_view(session_id):
-    db = get_db()
+def _audit_session_context(db, session_id):
     sess = db.execute("SELECT s.*, u.full_name as performed_by_name FROM audit_sessions s "
                       "LEFT JOIN users u ON u.id=s.performed_by WHERE s.id=?", (session_id,)).fetchone()
     if not sess:
-        flash("Audit session not found.", "error")
-        return redirect(url_for("audit_history_list"))
+        return None
     items = db.execute("SELECT * FROM inventory_list WHERE active=true ORDER BY category, name").fetchall()
     existing_lines = {r["item_id"]: dict(r) for r in db.execute(
         "SELECT * FROM audit_session_lines WHERE session_id=?", (session_id,)).fetchall()}
@@ -3729,8 +3907,19 @@ def audit_session_view(session_id):
     for r in confirmed_rows:
         latest_confirmed[r["item_id"]] = r
     readonly = sess["status"] == "Confirmed"
-    return render_template("audit_session_view.html", sess=sess, items=items, existing_lines=existing_lines,
-                            latest_confirmed=latest_confirmed, readonly=readonly)
+    return dict(sess=sess, items=items, existing_lines=existing_lines,
+                latest_confirmed=latest_confirmed, readonly=readonly)
+
+
+@app.route("/audit-history/session/<int:session_id>")
+@auth.permission_required("manage_audit_history")
+def audit_session_view(session_id):
+    db = get_db()
+    ctx = _audit_session_context(db, session_id)
+    if ctx is None:
+        flash("Audit session not found.", "error")
+        return redirect(url_for("audit_history_list"))
+    return render_template("audit_session_view.html", **ctx)
 
 
 def _save_audit_lines(db, session_id):
@@ -3794,8 +3983,17 @@ def audit_session_save(session_id):
     try:
         _save_audit_lines(db, session_id)
     except BadNumber:
+        # Whichever earlier items in the loop already had a db.execute()
+        # called for them (before the item that failed) were never
+        # committed — roll them back rather than leaving them sitting in
+        # an open transaction, so a save that overall failed can't
+        # partially apply.
+        db.rollback()
         flash("Audit counts must be valid numbers. The draft was not saved — please correct the highlighted value(s).", "error")
-        return redirect(url_for("audit_session_view", session_id=session_id))
+        ctx = _audit_session_context(db, session_id)
+        if ctx is None:
+            return redirect(url_for("audit_history_list"))
+        return render_template("audit_session_view.html", **ctx, form=request.form)
     auth.log_change(db, "audit_sessions", str(session_id), "update")
     db.commit()
     flash("Audit saved. You can come back and finish it later, or confirm it once it's complete.", "success")
@@ -3813,8 +4011,12 @@ def audit_session_confirm(session_id):
     try:
         _save_audit_lines(db, session_id)
     except BadNumber:
+        db.rollback()
         flash("Audit counts must be valid numbers. Nothing was confirmed — please correct the highlighted value(s).", "error")
-        return redirect(url_for("audit_session_view", session_id=session_id))
+        ctx = _audit_session_context(db, session_id)
+        if ctx is None:
+            return redirect(url_for("audit_history_list"))
+        return render_template("audit_session_view.html", **ctx, form=request.form)
 
     # Consignment shortfall check — before the UPDATE below, since that's
     # what makes THIS session's counts the new baseline; "expected" needs
@@ -3874,12 +4076,11 @@ def audit_session_confirm(session_id):
 # ---------------------------------------------------------------------------
 # Boarding
 # ---------------------------------------------------------------------------
-@app.route("/boarding")
-@auth.permission_required("manage_boarding")
-def boarding_page():
-    db = get_db()
-    show_all = request.args.get("all") == "1"
-    page = get_page()
+def _boarding_page_context(db, show_all, page):
+    """Builds the kwargs boarding.html needs (sessions + pagination). Split
+    out of boarding_page() so a failed boarding_new()/boarding_edit()
+    submit can re-render the same page (with `form=` set so the rejected
+    values redisplay via fv()) instead of losing the form on a redirect."""
     count_where = "" if show_all else " WHERE dismissed=false"
     total = db.execute(f"SELECT COUNT(*) c FROM boarding_sessions{count_where}").fetchone()["c"]
     q = ("SELECT b.*, p.animal_name, p.species, o.id AS owner_id, o.name AS owner_name, o.phone AS owner_phone "
@@ -3908,8 +4109,17 @@ def boarding_page():
     for r in rows:
         r["billing"] = logic.boarding_billing_summary_from_fields(r, paid_by_id.get(r["id"], 0))
         r["incident_count"] = incidents_by_id.get(r["id"], 0)
-    return render_template("boarding.html", sessions=rows, show_all=show_all, today=date.today().isoformat(),
-                            page=page, total_pages=page_count(total), total_count=total)
+    return dict(sessions=rows, show_all=show_all, today=date.today().isoformat(),
+                page=page, total_pages=page_count(total), total_count=total)
+
+
+@app.route("/boarding")
+@auth.permission_required("manage_boarding")
+def boarding_page():
+    db = get_db()
+    show_all = request.args.get("all") == "1"
+    page = get_page()
+    return render_template("boarding.html", **_boarding_page_context(db, show_all, page))
 
 
 @app.route("/boarding/new", methods=["POST"])
@@ -3918,24 +4128,37 @@ def boarding_new():
     db = get_db()
     f = request.form
     patient_id = f.get("patient_id")
+
+    def redisplay(patient_row=None):
+        ctx = _boarding_page_context(db, False, 1)
+        return render_template(
+            "boarding.html", **ctx, form=f, show_new_form=True, selected_patient_id=patient_id,
+            selected_patient_label=(f"{patient_row['animal_name']} — {patient_row['owner_name']} ({patient_id})"
+                                     if patient_row else None),
+        )
+
     if not patient_id:
         flash("Pick a patient first.", "error")
         return redirect(url_for("boarding_page"))
+    patient_row = db.execute(
+        "SELECT p.animal_name, o.name as owner_name FROM patients p JOIN owners o ON o.id=p.owner_id WHERE p.id=?",
+        (patient_id,),
+    ).fetchone()
     try:
         price_per_day = parse_money(f.get("price_per_day"))
         total = parse_money(f.get("total"))
     except BadNumber:
         flash("Price per Day and Total must be valid numbers.", "error")
-        return redirect(url_for("boarding_page"))
+        return redisplay(patient_row)
     if has_negative(price_per_day, total):
         flash("Price per Day and Total can't be negative.", "error")
-        return redirect(url_for("boarding_page"))
+        return redisplay(patient_row)
     try:
         entry_date = clean_date(f.get("entry_date"), field="entry_date") or date.today().isoformat()
         dismissal_date = clean_date(f.get("dismissal_date"), field="dismissal_date")
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("boarding_page"))
+        return redisplay(patient_row)
     total_is_auto = total is None
     if total_is_auto:
         total = logic.boarding_suggested_total(price_per_day, entry_date, dismissal_date)
@@ -3966,6 +4189,11 @@ def boarding_edit(boarding_id):
     if not old:
         flash("Boarding session not found.", "error")
         return redirect(url_for("boarding_page"))
+
+    def redisplay():
+        ctx = _boarding_page_context(db, False, 1)
+        return render_template("boarding.html", **ctx, form=f, edit_error_id=boarding_id)
+
     conflict = stale_edit_error(old["updated_at"], f.get("expected_updated_at"), "boarding session")
     if conflict:
         flash(conflict, "error")
@@ -3975,16 +4203,16 @@ def boarding_edit(boarding_id):
         total = parse_money(f.get("total"))
     except BadNumber:
         flash("Price per Day and Total must be valid numbers.", "error")
-        return redirect(url_for("boarding_page"))
+        return redisplay()
     if has_negative(price_per_day, total):
         flash("Price per Day and Total can't be negative.", "error")
-        return redirect(url_for("boarding_page"))
+        return redisplay()
     try:
         entry_date = clean_date(f.get("entry_date"), field="entry_date") or old["entry_date"]
         dismissal_date = clean_date(f.get("dismissal_date"), field="dismissal_date")
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("boarding_page"))
+        return redisplay()
     total_is_auto = total is None
     if total_is_auto:
         total = logic.boarding_suggested_total(price_per_day, entry_date, dismissal_date)
@@ -4088,6 +4316,12 @@ def boarding_incident(boarding_id):
 @auth.permission_required("manage_boarding")
 def boarding_payment(boarding_id):
     db = get_db()
+    f = request.form
+
+    def redisplay():
+        return render_template("boarding.html", **_boarding_page_context(db, False, 1),
+                                form=f, payment_error_id=boarding_id)
+
     # Locked before computing the balance, same reasoning as
     # distributor_payment_new()/consignment_settlement_new() — there's no
     # delete/edit route for a payment once recorded (unlike a distributor
@@ -4098,17 +4332,17 @@ def boarding_payment(boarding_id):
         flash("Boarding session not found.", "error")
         return redirect(url_for("boarding_page"))
     try:
-        amount = parse_money(request.form.get("amount")) or 0
+        amount = parse_money(f.get("amount")) or 0
     except BadNumber:
         flash("Payment amount must be a valid number.", "error")
-        return redirect(url_for("boarding_page"))
+        return redisplay()
     if amount <= 0:
         flash("Payment amount must be greater than 0.", "error")
-        return redirect(url_for("boarding_page"))
+        return redisplay()
     balance = logic.boarding_billing_summary(db, boarding_id)["balance"]
     if amount > balance + 1e-9:
         flash(f"That's more than the remaining balance of {logic.fmt_money(balance)} IQD on this stay.", "error")
-        return redirect(url_for("boarding_page"))
+        return redisplay()
     cur = db.execute(
         "INSERT INTO payments (boarding_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?) RETURNING id",
         (boarding_id, amount, request.form.get("method"), date.today().isoformat(),
@@ -4150,6 +4384,18 @@ def pos_page():
 def pos_checkout():
     db = get_db()
     f = request.form
+
+    def redisplay():
+        # The cart itself is JS in-memory state (see pos.html — `cart = []`
+        # starts empty on every page load, by design, even without a
+        # failed submit involved) so full cart-line restoration isn't
+        # attempted here; that's not a regression from this fix, since a
+        # plain redirect already loses the cart today. What IS worth
+        # keeping is the non-cart state that's cheap to redisplay via
+        # fv(): discount %, payment method, and cash received.
+        cap = auth.discount_cap_for(db)
+        return render_template("pos.html", discount_cap=cap, idempotency_key=uuid.uuid4().hex, form=f)
+
     # Friendly fast-path for a double-click on "Complete Sale" — the same
     # unchanged cart submitted twice previously created two separate,
     # fully valid sales (double-charge, double stock deduction). The
@@ -4169,20 +4415,20 @@ def pos_checkout():
         discount_percent = parse_money(f.get("discount_percent")) or 0
     except BadNumber:
         flash("Discount must be a valid number.", "error")
-        return redirect(url_for("pos_page"))
+        return redisplay()
     cap = auth.discount_cap_for(db)
     error = discount_percent_error(discount_percent, cap)
     if error:
         flash(error, "error")
-        return redirect(url_for("pos_page"))
+        return redisplay()
     if not item_ids:
         flash("Cart is empty.", "error")
-        return redirect(url_for("pos_page"))
+        return redisplay()
     if discount_percent > 0:
         blocked = logic.non_discountable_line_names_for_items(db, item_ids)
         if blocked:
             flash(f"Can't apply a discount — the cart includes item(s) marked as not discountable: {', '.join(blocked)}.", "error")
-            return redirect(url_for("pos_page"))
+            return redisplay()
 
     # Merge quantities for any item that appears in more than one cart line
     # before checking stock. The normal UI cart already merges duplicates
@@ -4196,7 +4442,7 @@ def pos_checkout():
             qty = parse_money(qty, required=True)
         except BadNumber:
             flash("Cart quantities must be valid numbers.", "error")
-            return redirect(url_for("pos_page"))
+            return redisplay()
         if qty <= 0:
             continue
         qty_by_item[iid] = qty_by_item.get(iid, 0) + qty
@@ -4249,17 +4495,17 @@ def pos_checkout():
         # it first, same as any other item.
         if status and status["current_stock"] is None:
             flash(f"{status['name']} hasn't been through an inventory audit yet — run an audit before selling it.", "error")
-            return redirect(url_for("pos_page"))
+            return redisplay()
         if status and qty > status["current_stock"]:
             flash(f"Only {status['current_stock']} {status['unit'] or ''} of {status['name']} in stock — sale blocked.", "error")
-            return redirect(url_for("pos_page"))
+            return redisplay()
         line_total = price * qty
         subtotal += line_total
         lines.append((iid, qty, price, line_total, cost_by_item.get(iid)))
 
     if not lines:
         flash("Nothing to sell.", "error")
-        return redirect(url_for("pos_page"))
+        return redisplay()
 
     total = money.round_to_denomination(subtotal * (1 - discount_percent / 100))
     payment_method = f.get("payment_method")
@@ -4269,12 +4515,12 @@ def pos_checkout():
             cash_received = parse_money(f.get("cash_received"))
         except BadNumber:
             flash("Cash Received must be a valid number.", "error")
-            return redirect(url_for("pos_page"))
+            return redisplay()
         if cash_received is not None:
             if cash_received < total:
                 flash(f"Cash received ({logic.fmt_money(cash_received)} IQD) is less than the total "
                       f"({logic.fmt_money(total)} IQD) — collect the full amount before completing the sale.", "error")
-                return redirect(url_for("pos_page"))
+                return redisplay()
             # Floored to the nearest 250 IQD note — never hand back more
             # cash than owed.
             change_given = max(money.round_to_denomination(cash_received - total, mode="down"), 0)
@@ -4397,19 +4643,32 @@ def inpatient_new():
     db = get_db()
     if request.method == "POST":
         f = request.form
+
+        def redisplay():
+            patient_row = db.execute(
+                "SELECT p.animal_name, o.name as owner_name FROM patients p JOIN owners o ON o.id=p.owner_id WHERE p.id=?",
+                (f.get("patient_id"),),
+            ).fetchone() if f.get("patient_id") else None
+            return render_template(
+                "inpatient_new.html", vets=vet_users(db), form=f,
+                selected_patient_id=f.get("patient_id"),
+                selected_patient_label=(f"{patient_row['animal_name']} — {patient_row['owner_name']} ({f.get('patient_id')})"
+                                         if patient_row else None),
+            )
+
         try:
             new_weight_kg = parse_money(f.get("weight_kg"))
             new_bcs = parse_int(f.get("bcs"))
             new_admission_date = clean_date(f.get("admission_date"), field="admission_date")
         except BadNumber:
             flash("Weight and BCS must be valid numbers.", "error")
-            return redirect(url_for("inpatient_new"))
+            return redisplay()
         except BadDate as e:
             flash(str(e), "error")
-            return redirect(url_for("inpatient_new"))
+            return redisplay()
         if has_negative(new_weight_kg):
             flash("Weight can't be negative.", "error")
-            return redirect(url_for("inpatient_new"))
+            return redisplay()
         case_id = _create_inpatient_case(db, f["patient_id"], None, f.get("complaint"), new_admission_date,
                                           new_weight_kg, new_bcs)
         admit_fields = {
@@ -4429,19 +4688,14 @@ def inpatient_new():
     return render_template("inpatient_new.html", vets=vet_users(db))
 
 
-@app.route("/inpatient/<int:case_id>")
-@auth.permission_required("manage_inpatient")
-def inpatient_detail(case_id):
-    db = get_db()
+def _inpatient_detail_context(db, case_id):
     case = db.execute(
         "SELECT c.*, p.animal_name, p.species, p.sex, p.age_note, o.name as owner_name, o.phone as owner_phone, "
         "p.id as patient_id FROM inpatient_cases c JOIN patients p ON p.id=c.patient_id "
         "JOIN owners o ON o.id=p.owner_id WHERE c.id=?", (case_id,)
     ).fetchone()
     if not case:
-        flash("Inpatient case not found.", "error")
-        return redirect(url_for("inpatient_list"))
-
+        return None
     updates = db.execute("SELECT u.*, us.full_name FROM inpatient_updates u LEFT JOIN users us ON us.id=u.user_id "
                          "WHERE case_id=? ORDER BY timestamp DESC", (case_id,)).fetchall()
     contacts = db.execute("SELECT c.*, us.full_name FROM inpatient_contact_log c LEFT JOIN users us ON us.id=c.staff_user_id "
@@ -4450,10 +4704,20 @@ def inpatient_detail(case_id):
     payments = db.execute("SELECT * FROM payments WHERE inpatient_case_id=? ORDER BY date DESC", (case_id,)).fetchall()
     files = attach_mod.list_attachments(db, "inpatient", case_id)
     cap = auth.discount_cap_for(db)
+    return dict(case=case, updates=updates, recent_updates=updates[:3],
+                contacts=contacts, recent_contacts=contacts[:3], billing=billing, payments=payments,
+                vets=vet_users(db), files=files, discount_cap=cap)
 
-    return render_template("inpatient_detail.html", case=case, updates=updates, recent_updates=updates[:3],
-                            contacts=contacts, recent_contacts=contacts[:3], billing=billing, payments=payments,
-                            vets=vet_users(db), files=files, discount_cap=cap)
+
+@app.route("/inpatient/<int:case_id>")
+@auth.permission_required("manage_inpatient")
+def inpatient_detail(case_id):
+    db = get_db()
+    ctx = _inpatient_detail_context(db, case_id)
+    if ctx is None:
+        flash("Inpatient case not found.", "error")
+        return redirect(url_for("inpatient_list"))
+    return render_template("inpatient_detail.html", **ctx)
 
 
 @app.route("/inpatient/<int:case_id>/edit", methods=["POST"])
@@ -4461,11 +4725,19 @@ def inpatient_detail(case_id):
 def inpatient_edit(case_id):
     db = get_db()
     f = request.form
+
+    def redisplay():
+        ctx = _inpatient_detail_context(db, case_id)
+        if ctx is None:
+            flash("Inpatient case not found.", "error")
+            return redirect(url_for("inpatient_list"))
+        return render_template("inpatient_detail.html", **ctx, form=f)
+
     old = db.execute("SELECT * FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
     conflict = stale_edit_error(old["updated_at"] if old else None, f.get("expected_updated_at"), "inpatient case")
     if conflict:
         flash(conflict, "error")
-        return redirect(url_for("inpatient_detail", case_id=case_id))
+        return redisplay()
     dismissed = f.get("dismissed") == "on"
     try:
         edited_dismissal_date = clean_date(f.get("dismissal_date"), field="dismissal_date") if dismissed else None
@@ -4473,10 +4745,10 @@ def inpatient_edit(case_id):
         edited_bcs = parse_int(f.get("bcs"))
     except (BadDate, BadNumber) as e:
         flash(str(e) if isinstance(e, BadDate) else "Weight and BCS must be valid numbers.", "error")
-        return redirect(url_for("inpatient_detail", case_id=case_id))
+        return redisplay()
     if has_negative(edited_weight_kg):
         flash("Weight can't be negative.", "error")
-        return redirect(url_for("inpatient_detail", case_id=case_id))
+        return redisplay()
     new_vals = {
         "complaint": f.get("complaint"), "exam_findings": f.get("exam_findings"),
         "weight_kg": edited_weight_kg, "bcs": edited_bcs,
@@ -4624,16 +4896,25 @@ def inpatient_billing_delete(case_id, line_id):
 @auth.permission_required("manage_inpatient")
 def inpatient_discount_save(case_id):
     db = get_db()
+    f = request.form
+
+    def redisplay():
+        ctx = _inpatient_detail_context(db, case_id)
+        if ctx is None:
+            flash("Inpatient case not found.", "error")
+            return redirect(url_for("inpatient_list"))
+        return render_template("inpatient_detail.html", **ctx, form=f, discount_error=True)
+
     try:
-        percent = parse_money(request.form.get("discount_percent")) or 0
+        percent = parse_money(f.get("discount_percent")) or 0
     except BadNumber:
         flash("Discount must be a valid number.", "error")
-        return redirect(url_for("inpatient_detail", case_id=case_id))
+        return redisplay()
     cap = auth.discount_cap_for(db)
     error = discount_percent_error(percent, cap)
     if error:
         flash(error, "error")
-        return redirect(url_for("inpatient_detail", case_id=case_id))
+        return redisplay()
     if percent > 0:
         price_ids = [r["price_id"] for r in db.execute(
             "SELECT DISTINCT price_id FROM inpatient_billing WHERE case_id=?", (case_id,)
@@ -4641,7 +4922,7 @@ def inpatient_discount_save(case_id):
         blocked = logic.non_discountable_line_names(db, price_ids)
         if blocked:
             flash(f"Can't apply a discount — this bill includes item(s) marked as not discountable: {', '.join(blocked)}.", "error")
-            return redirect(url_for("inpatient_detail", case_id=case_id))
+            return redisplay()
     old = db.execute("SELECT discount_percent FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
     db.execute("UPDATE inpatient_cases SET discount_percent=?, discount_applied_by=? WHERE id=?",
               (percent, session["user_id"], case_id))
@@ -4658,6 +4939,14 @@ def inpatient_discount_save(case_id):
 def inpatient_payment_add(case_id):
     db = get_db()
     f = request.form
+
+    def redisplay():
+        ctx = _inpatient_detail_context(db, case_id)
+        if ctx is None:
+            flash("Inpatient case not found.", "error")
+            return redirect(url_for("inpatient_list"))
+        return render_template("inpatient_detail.html", **ctx, form=f, payment_error=True)
+
     # Locked before computing the balance — same reasoning as
     # visit_payment_add()/boarding_payment().
     if not db.execute("SELECT 1 FROM inpatient_cases WHERE id=? FOR UPDATE", (case_id,)).fetchone():
@@ -4667,19 +4956,19 @@ def inpatient_payment_add(case_id):
         amount = parse_money(f.get("amount"), required=True)
     except BadNumber:
         flash("Payment amount must be a valid number.", "error")
-        return redirect(url_for("inpatient_detail", case_id=case_id))
+        return redisplay()
     if amount <= 0:
         flash("Payment amount must be greater than 0.", "error")
-        return redirect(url_for("inpatient_detail", case_id=case_id))
+        return redisplay()
     balance = logic.inpatient_billing_summary(db, case_id)["balance"]
     if amount > balance + 1e-9:
         flash(f"That's more than the remaining balance of {logic.fmt_money(balance)} IQD on this case.", "error")
-        return redirect(url_for("inpatient_detail", case_id=case_id))
+        return redisplay()
     try:
         payment_date = clean_date(f.get("date"), field="date") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("inpatient_detail", case_id=case_id))
+        return redisplay()
     cur = db.execute(
         "INSERT INTO payments (inpatient_case_id, amount, method, date, user_id, notes) VALUES (?,?,?,?,?,?) RETURNING id",
         (case_id, amount, f.get("method"), payment_date, session["user_id"], f.get("notes")),
@@ -4712,6 +5001,23 @@ def inpatient_attachment_upload(case_id):
 # ---------------------------------------------------------------------------
 # Appointments
 # ---------------------------------------------------------------------------
+def _appointments_page_context(db, week_anchor, selected_day):
+    """Builds the kwargs appointments.html needs for a given week/day. Split
+    out of appointments_page() so a failed appointment_new() submit can
+    re-render the same grid (with `form=` set so the rejected values
+    redisplay via fv()) instead of losing the modal's data on a redirect."""
+    today_iso = date.today().isoformat()
+    days = logic.week_dates(week_anchor)
+    columns, grid = logic.day_grid(db, selected_day)
+    prev_week = (days[0] - timedelta(days=7)).isoformat()
+    next_week = (days[0] + timedelta(days=7)).isoformat()
+    has_vet_columns = any(c["resource_type"] == "vet" for c in columns)
+    orphaned = logic.orphaned_appointments(db)
+    return dict(days=days, selected_day=selected_day, columns=columns,
+                grid=grid, week_anchor=week_anchor, prev_week=prev_week, next_week=next_week,
+                today_iso=today_iso, has_vet_columns=has_vet_columns, orphaned=orphaned)
+
+
 @app.route("/appointments")
 @auth.permission_required("manage_appointments")
 def appointments_page():
@@ -4723,21 +5029,13 @@ def appointments_page():
     except ValueError:
         flash("That week link wasn't valid, showing the current week instead.", "error")
         week_anchor = today_iso
-    days = logic.week_dates(week_anchor)
     selected_day = request.args.get("day", today_iso)
     try:
         logic.parse_date(selected_day)
     except ValueError:
         flash("That date wasn't valid, showing today instead.", "error")
         selected_day = today_iso
-    columns, grid = logic.day_grid(db, selected_day)
-    prev_week = (days[0] - timedelta(days=7)).isoformat()
-    next_week = (days[0] + timedelta(days=7)).isoformat()
-    has_vet_columns = any(c["resource_type"] == "vet" for c in columns)
-    orphaned = logic.orphaned_appointments(db)
-    return render_template("appointments.html", days=days, selected_day=selected_day, columns=columns,
-                            grid=grid, week_anchor=week_anchor, prev_week=prev_week, next_week=next_week,
-                            today_iso=today_iso, has_vet_columns=has_vet_columns, orphaned=orphaned)
+    return render_template("appointments.html", **_appointments_page_context(db, week_anchor, selected_day))
 
 
 @app.route("/appointments/new", methods=["POST"])
@@ -4745,23 +5043,46 @@ def appointments_page():
 def appointment_new():
     db = get_db()
     f = request.form
+    today_iso = date.today().isoformat()
+
+    def redisplay(day=None):
+        # No BadDate/BadNumber here (this route's failures are mostly
+        # semantic "not a valid choice" checks, not parse errors) but the
+        # same data-loss pattern applies — a rejected submit was silently
+        # dropping pet_name/owner_name/type/reason on every redirect below.
+        # `day` re-derives which day's grid to show around the modal; falls
+        # back to today when appt_date itself was missing/invalid so
+        # week_dates()/day_grid() below always get a parseable date.
+        day = day or today_iso
+        ctx = _appointments_page_context(db, day, day)
+        resource_type_val = f.get("resource_type")
+        resource_id_val = f.get("resource_id") or None
+        match_col = next(
+            (c for c in ctx["columns"] if c["resource_type"] == resource_type_val
+             and str(c.get("resource_id") or "") == str(resource_id_val or "")), None,
+        )
+        return render_template(
+            "appointments.html", **ctx, form=f, show_add_modal=True,
+            modal_slot_label=f"{f.get('appt_date', '')} · {f.get('slot_label', '')} · {match_col['label'] if match_col else ''}",
+        )
+
     try:
         appt_date = clean_date(f.get("appt_date"), field="appt_date")
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("appointments_page"))
+        return redisplay()
     if appt_date is None:
         flash("Appointment date is required.", "error")
-        return redirect(url_for("appointments_page"))
+        return redisplay()
     slot_label = f["slot_label"]
     resource_type = f.get("resource_type")
     if resource_type not in RESOURCE_TYPES:
         flash("Resource type must be one of: " + ", ".join(RESOURCE_TYPES) + ".", "error")
-        return redirect(url_for("appointments_page", day=appt_date))
+        return redisplay(appt_date)
     appointment_type = f.get("appointment_type")
     if appointment_type not in APPOINTMENT_TYPES:
         flash("Appointment type must be one of: " + ", ".join(APPOINTMENT_TYPES) + ".", "error")
-        return redirect(url_for("appointments_page", day=appt_date))
+        return redisplay(appt_date)
     resource_id = f.get("resource_id") or None
     if resource_type == "grooming":
         # Grooming has no per-resource distinction — every grooming booking
@@ -4775,14 +5096,14 @@ def appointment_new():
         resource_id = None
     elif not resource_id or not any(v["id"] == resource_id for v in logic.vet_users(db)):
         flash("Pick a valid, active vet for this appointment.", "error")
-        return redirect(url_for("appointments_page", day=appt_date))
+        return redisplay(appt_date)
     if not any(s["label"] == slot_label for s in logic.generate_slots(db)):
         flash("That's not a valid time slot — the schedule may have changed. Reload and try again.", "error")
-        return redirect(url_for("appointments_page", day=appt_date))
+        return redisplay(appt_date)
 
     if logic.slot_conflict(db, appt_date, slot_label, resource_type, resource_id):
         flash("That slot is already booked for this vet/groomer.", "error")
-        return redirect(url_for("appointments_page", day=appt_date))
+        return redisplay(appt_date)
 
     # The check above is a friendly fast-path, not the real guarantee — two
     # concurrent bookings for the same slot could both pass it before either
@@ -4804,7 +5125,7 @@ def appointment_new():
     except dbmod.IntegrityError:
         db.rollback()
         flash("That slot is already booked for this vet/groomer.", "error")
-        return redirect(url_for("appointments_page", day=appt_date))
+        return redisplay(appt_date)
     flash("Appointment booked.", "success")
     return redirect(url_for("appointments_page", day=appt_date))
 
@@ -4827,14 +5148,18 @@ def appointment_cancel(appt_id):
 # ---------------------------------------------------------------------------
 # Reports: Monthly & Yearly P&L (Admin only)
 # ---------------------------------------------------------------------------
+def _reports_context(db):
+    pl = logic.monthly_pl(db)
+    opex_rows = db.execute("SELECT month, rent, salaries, utilities, marketing, other FROM monthly_opex").fetchall()
+    opex_by_month = {r["month"]: dict(r) for r in opex_rows}
+    return dict(pl=pl, opex_by_month=opex_by_month)
+
+
 @app.route("/reports")
 @auth.permission_required("view_financial_reports")
 def reports():
     db = get_db()
-    pl = logic.monthly_pl(db)
-    opex_rows = db.execute("SELECT month, rent, salaries, utilities, marketing, other FROM monthly_opex").fetchall()
-    opex_by_month = {r["month"]: dict(r) for r in opex_rows}
-    return render_template("reports.html", pl=pl, opex_by_month=opex_by_month)
+    return render_template("reports.html", **_reports_context(db))
 
 
 @app.route("/reports/yearly")
@@ -5014,6 +5339,19 @@ def flash_cash_denomination_warning(amount):
               "odd amount here can make an otherwise-correct day look slightly off.", "error")
 
 
+def _refunds_page_context(db, date_filter, page):
+    """Builds the kwargs refunds.html needs. Split out of refunds_page() so
+    a failed refund_retail_save()/refund_service_save() submit can
+    re-render the same page (with `form=` set so the rejected values
+    redisplay via fv()) instead of losing the form on a redirect."""
+    count_where = " WHERE refund_date = ?" if date_filter else ""
+    count_params = [date_filter] if date_filter else []
+    total = db.execute(f"SELECT COUNT(*) c FROM refunds{count_where}", count_params).fetchone()["c"]
+    refunds = logic.recent_refunds(db, limit=PER_PAGE, offset=page_offset(page), date_filter=date_filter)
+    return dict(refunds=refunds, today=date.today().isoformat(), payment_methods=PAYMENT_METHODS,
+                date_filter=date_filter, page=page, total_pages=page_count(total), total_count=total)
+
+
 @app.route("/refunds")
 @auth.permission_required("manage_refunds")
 def refunds_page():
@@ -5025,13 +5363,7 @@ def refunds_page():
     except ValueError:
         flash("That date wasn't valid — showing all dates instead.", "error")
         date_filter = None
-    count_where = " WHERE refund_date = ?" if date_filter else ""
-    count_params = [date_filter] if date_filter else []
-    total = db.execute(f"SELECT COUNT(*) c FROM refunds{count_where}", count_params).fetchone()["c"]
-    refunds = logic.recent_refunds(db, limit=PER_PAGE, offset=page_offset(page), date_filter=date_filter)
-    return render_template("refunds.html", refunds=refunds, today=date.today().isoformat(), payment_methods=PAYMENT_METHODS,
-                            date_filter=date_filter,
-                            page=page, total_pages=page_count(total), total_count=total)
+    return render_template("refunds.html", **_refunds_page_context(db, date_filter, page))
 
 
 @app.route("/refunds/retail", methods=["POST"])
@@ -5039,11 +5371,28 @@ def refunds_page():
 def refund_retail_save():
     db = get_db()
     f = request.form
+
+    def redisplay():
+        # The per-item quantity grid is populated client-side from
+        # /api/sales/<id>/refundable-items (see lookupRefundSale() in
+        # refunds.html), not from a server-rendered list — so rather than
+        # reimplementing that lookup here too, the redisplay passes the
+        # submitted sale_id/quantities through and has the page re-run the
+        # same JS lookup on load, then refill the quantity inputs from
+        # what was actually submitted. refund_date/refund_method/reason/
+        # restock use the normal fv() pattern.
+        ctx = _refunds_page_context(db, None, get_page())
+        return render_template(
+            "refunds.html", **ctx, form=f, form_kind="retail",
+            retail_error_sale_id=f.get("sale_id", ""),
+            retail_error_quantities=list(zip(f.getlist("sale_item_id"), f.getlist("quantity"))),
+        )
+
     try:
         sale_id = int(f.get("sale_id", ""))
     except (TypeError, ValueError):
         flash("Look up a sale first — a retail refund must be linked to the sale it's refunding.", "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
     sale_item_ids_raw = f.getlist("sale_item_id")
     quantities = f.getlist("quantity")
     restock = f.get("restock") == "on"
@@ -5051,21 +5400,21 @@ def refund_retail_save():
     refund_method = f.get("refund_method")
     if refund_method not in PAYMENT_METHODS:
         flash("Pick how this refund was actually paid out: " + ", ".join(PAYMENT_METHODS) + ".", "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
     try:
         refund_date = clean_date(f.get("refund_date"), field="refund_date") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
 
     if not sale_item_ids_raw:
         flash("No items selected — nothing to refund.", "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
     try:
         sale_item_ids = [int(sid) for sid in sale_item_ids_raw]
     except ValueError:
         flash("Invalid item selection.", "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
 
     # Lock every sale_items row being refunded, in a fixed order, before
     # computing how much of each is still refundable — same reasoning as
@@ -5078,7 +5427,7 @@ def refund_retail_save():
     sale, refundable = logic.refundable_sale_items(db, sale_id)
     if not sale:
         flash("Sale not found.", "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
     remaining_by_id = {l["sale_item_id"]: l for l in refundable}
 
     lines, total = [], 0
@@ -5087,7 +5436,7 @@ def refund_retail_save():
             qty = parse_money(qty_raw, required=True)
         except BadNumber:
             flash("Refund quantities must be valid numbers.", "error")
-            return redirect(url_for("refunds_page"))
+            return redisplay()
         if qty <= 0:
             continue
         # Priced from what this sale actually charged per unit
@@ -5097,10 +5446,10 @@ def refund_retail_save():
         line = remaining_by_id.get(sid)
         if not line:
             flash("One of the selected items isn't part of that sale.", "error")
-            return redirect(url_for("refunds_page"))
+            return redisplay()
         if qty > line["remaining"] + 1e-9:
             flash(f"Can't refund {qty:g} {line['name']} — only {line['remaining']:g} left refundable from this sale.", "error")
-            return redirect(url_for("refunds_page"))
+            return redisplay()
         price = line["unit_price"]
         line_total = round(price * qty, 2)
         total += line_total
@@ -5108,7 +5457,7 @@ def refund_retail_save():
 
     if not lines:
         flash("Nothing to refund.", "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
 
     # Microsecond precision — same reasoning as pos_checkout()'s `now`
     # (restocking here writes an inventory_transactions row too).
@@ -5149,27 +5498,32 @@ def refund_retail_save():
 def refund_service_save():
     db = get_db()
     f = request.form
+
+    def redisplay():
+        ctx = _refunds_page_context(db, None, get_page())
+        return render_template("refunds.html", **ctx, form=f, form_kind="service")
+
     try:
         amount = parse_money(f.get("amount")) or 0
     except BadNumber:
         flash("Refund amount must be a valid number.", "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
     reason = (f.get("reason") or "").strip()
     refund_method = f.get("refund_method")
     if refund_method not in PAYMENT_METHODS:
         flash("Pick how this refund was actually paid out: " + ", ".join(PAYMENT_METHODS) + ".", "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
     try:
         refund_date = clean_date(f.get("refund_date"), field="refund_date") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
     visit_id = (f.get("visit_id") or "").strip() or None
     case_id_raw = (f.get("inpatient_case_id") or "").strip()
 
     if amount <= 0:
         flash("Refund amount must be greater than 0.", "error")
-        return redirect(url_for("refunds_page"))
+        return redisplay()
 
     # Locked before computing what's refundable, same reasoning as every
     # other cap-and-lock in this app — without this, two near-simultaneous
@@ -5179,7 +5533,7 @@ def refund_service_save():
     if visit_id:
         if not db.execute("SELECT 1 FROM visits WHERE id=? FOR UPDATE", (visit_id,)).fetchone():
             flash(f"Visit {visit_id} not found.", "error")
-            return redirect(url_for("refunds_page"))
+            return redisplay()
 
     case_id = None
     if case_id_raw:
@@ -5187,7 +5541,7 @@ def refund_service_save():
             "SELECT 1 FROM inpatient_cases WHERE id=? FOR UPDATE", (int(case_id_raw),)
         ).fetchone():
             flash(f"Inpatient case {case_id_raw} not found.", "error")
-            return redirect(url_for("refunds_page"))
+            return redisplay()
         case_id = int(case_id_raw)
 
     # A service refund isn't required to link to a visit/case at all (a
@@ -5213,7 +5567,7 @@ def refund_service_save():
         if amount > refundable + 1e-9:
             flash(f"That's more than the {logic.fmt_money(max(refundable, 0))} IQD still refundable "
                   f"against this record.", "error")
-            return redirect(url_for("refunds_page"))
+            return redisplay()
 
     now = datetime.now().isoformat(timespec="seconds")
     rounded_amount = money.round_to_denomination(amount)
@@ -5241,6 +5595,15 @@ def refund_service_save():
 # that day and immutably logs the outcome (Deficit/Surplus/Perfect) — see
 # logic.cash_register_* for the actual math.
 # ---------------------------------------------------------------------------
+def _cash_register_page_context(db, day):
+    ledger = logic.cash_register_ledger(db, day)
+    totals = logic.cash_register_totals(db, day)
+    payouts = logic.cash_register_payouts_for_day(db, day)
+    latest_audit = logic.cash_register_latest_audit(db, day)
+    return dict(day=day, ledger=ledger, totals=totals, payouts=payouts,
+                latest_audit=latest_audit, today=date.today().isoformat())
+
+
 @app.route("/cash-register")
 @auth.permission_required("manage_cash_register")
 def cash_register_page():
@@ -5251,12 +5614,7 @@ def cash_register_page():
     except ValueError:
         flash("That date wasn't valid — showing today instead.", "error")
         day = date.today().isoformat()
-    ledger = logic.cash_register_ledger(db, day)
-    totals = logic.cash_register_totals(db, day)
-    payouts = logic.cash_register_payouts_for_day(db, day)
-    latest_audit = logic.cash_register_latest_audit(db, day)
-    return render_template("cash_register.html", day=day, ledger=ledger, totals=totals,
-                            payouts=payouts, latest_audit=latest_audit, today=date.today().isoformat())
+    return render_template("cash_register.html", **_cash_register_page_context(db, day))
 
 
 @app.route("/cash-register/payout", methods=["POST"])
@@ -5264,19 +5622,24 @@ def cash_register_page():
 def cash_register_payout_new():
     db = get_db()
     f = request.form
+
+    def redisplay(day):
+        return render_template("cash_register.html", **_cash_register_page_context(db, day),
+                                form=f, show_payout_modal=True)
+
     try:
         day = clean_date(f.get("day"), field="day") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("cash_register_page"))
+        return redisplay(date.today().isoformat())
     try:
         amount = parse_money(f.get("amount"), required=True)
     except BadNumber:
         flash("Amount must be a valid number.", "error")
-        return redirect(url_for("cash_register_page", date=day))
+        return redisplay(day)
     if amount <= 0:
         flash("Amount must be greater than 0.", "error")
-        return redirect(url_for("cash_register_page", date=day))
+        return redisplay(day)
     # Recomputed fresh, not trusted from the page — same reasoning as
     # every other cap in this app: this is the live figure a cash-moving
     # action needs to be checked against, not whatever the page happened
@@ -5284,11 +5647,11 @@ def cash_register_payout_new():
     drawer_cash = logic.cash_register_totals(db, day)["Cash"]
     if amount > drawer_cash + 1e-9:
         flash(f"That's more than the {logic.fmt_money(drawer_cash)} IQD actually in the register for {day}.", "error")
-        return redirect(url_for("cash_register_page", date=day))
+        return redisplay(day)
     reason = (f.get("reason") or "").strip()
     if not reason:
         flash("Enter a reason for this payout.", "error")
-        return redirect(url_for("cash_register_page", date=day))
+        return redisplay(day)
     cur = db.execute(
         "INSERT INTO cash_register_payouts (payout_date, amount, reason, logged_by, created_at) "
         "VALUES (?,?,?,?,?) RETURNING id",
@@ -5307,19 +5670,24 @@ def cash_register_payout_new():
 def cash_register_audit_new():
     db = get_db()
     f = request.form
+
+    def redisplay(day):
+        return render_template("cash_register.html", **_cash_register_page_context(db, day),
+                                form=f, show_audit_modal=True)
+
     try:
         day = clean_date(f.get("day"), field="day") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
-        return redirect(url_for("cash_register_page"))
+        return redisplay(date.today().isoformat())
     try:
         counted_cash = parse_money(f.get("counted_cash"), required=True)
     except BadNumber:
         flash("Counted cash must be a valid number.", "error")
-        return redirect(url_for("cash_register_page", date=day))
+        return redisplay(day)
     if counted_cash < 0:
         flash("Counted cash can't be negative.", "error")
-        return redirect(url_for("cash_register_page", date=day))
+        return redisplay(day)
     # Recomputed fresh here, never trusted from the form — same reasoning
     # as consignment_settlement_new(): this is the figure the audit result
     # gets permanently compared against, so it has to be the real live
@@ -5353,13 +5721,17 @@ def cash_register_audit_new():
 def reports_opex_save():
     db = get_db()
     f = request.form
+
+    def redisplay():
+        return render_template("reports.html", **_reports_context(db), form=f)
+
     month = f.get("month", "").strip()
     if not month:
         flash("Pick a month first.", "error")
-        return redirect(url_for("reports"))
+        return redisplay()
     if not re.fullmatch(r"\d{4}-\d{2}", month):
         flash("That's not a valid month.", "error")
-        return redirect(url_for("reports"))
+        return redisplay()
     try:
         rent = parse_money(f.get("rent")) or 0
         salaries = parse_money(f.get("salaries")) or 0
@@ -5368,7 +5740,7 @@ def reports_opex_save():
         other = parse_money(f.get("other")) or 0
     except BadNumber:
         flash("Operating costs must be valid numbers.", "error")
-        return redirect(url_for("reports"))
+        return redisplay()
     db.execute(
         """INSERT INTO monthly_opex (month, rent, salaries, utilities, marketing, other) VALUES (?,?,?,?,?,?)
            ON CONFLICT(month) DO UPDATE SET rent=excluded.rent, salaries=excluded.salaries,

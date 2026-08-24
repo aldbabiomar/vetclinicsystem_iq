@@ -84,17 +84,17 @@
     <h2 style="margin-top:0;">New Appointment</h2>
     <form method="post" action="{{ url_for('appointment_new') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="appt_date" id="addDate">
-      <input type="hidden" name="slot_label" id="addSlot">
-      <input type="hidden" name="resource_type" id="addResourceType">
-      <input type="hidden" name="resource_id" id="addResourceId">
-      <p class="small muted" id="addSlotLabel"></p>
-      <div class="field" style="margin-bottom:10px;"><label>Pet Name</label><input required name="pet_name"></div>
-      <div class="field" style="margin-bottom:10px;"><label>Owner Name</label><input required name="owner_name"></div>
+      <input type="hidden" name="appt_date" id="addDate" value="{{ fv(form, 'appt_date') }}">
+      <input type="hidden" name="slot_label" id="addSlot" value="{{ fv(form, 'slot_label') }}">
+      <input type="hidden" name="resource_type" id="addResourceType" value="{{ fv(form, 'resource_type') }}">
+      <input type="hidden" name="resource_id" id="addResourceId" value="{{ fv(form, 'resource_id') }}">
+      <p class="small muted" id="addSlotLabel">{{ modal_slot_label or '' }}</p>
+      <div class="field" style="margin-bottom:10px;"><label>Pet Name</label><input required name="pet_name" value="{{ fv(form, 'pet_name') }}"></div>
+      <div class="field" style="margin-bottom:10px;"><label>Owner Name</label><input required name="owner_name" value="{{ fv(form, 'owner_name') }}"></div>
       <div class="field" style="margin-bottom:10px;"><label>Type</label>
-        <select name="appointment_type"><option>Medical</option><option>Grooming</option></select>
+        <select name="appointment_type"><option {{ 'selected' if fv(form, 'appointment_type', 'Medical')=='Medical' }}>Medical</option><option {{ 'selected' if fv(form, 'appointment_type', 'Medical')=='Grooming' }}>Grooming</option></select>
       </div>
-      <div class="field" style="margin-bottom:14px;"><label>Reason</label><input name="reason"></div>
+      <div class="field" style="margin-bottom:14px;"><label>Reason</label><input name="reason" value="{{ fv(form, 'reason') }}"></div>
       <div style="display:flex; gap:10px; justify-content:flex-end;">
         <button class="btn secondary" type="button" onclick="window.VZSpring.present(document.getElementById('addModal'), false, {});">Cancel</button>
         <button class="btn" type="submit">Book</button>
@@ -126,5 +126,8 @@ async function cancelAppt(el) {
   document.body.appendChild(f);
   f.submit();
 }
+{% if show_add_modal %}
+window.VZSpring.present(document.getElementById('addModal'), true, {});
+{% endif %}
 </script>
 {% endblock %}
