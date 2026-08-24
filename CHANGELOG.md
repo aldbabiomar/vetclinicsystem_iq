@@ -3,6 +3,12 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.7.5] - 2026-08-24
+
+### Fixed
+- On a phone, a table's sticky column headings sat hidden behind the top
+  bar while scrolling a long list. They now sit just below it.
+
 ## [1.7.4] - 2026-08-24
 
 ### Fixed
