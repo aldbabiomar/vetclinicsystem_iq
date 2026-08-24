@@ -8,8 +8,8 @@
   --line-soft: #F4EAE4;
 
   /* ---- Primary accent: dusty rose (#d2a2a4 family) ---- */
-  --primary: #B97A7D;
-  --primary-dark: #955F62;
+  --primary: #895A5D;
+  --primary-dark: #704A4C;
   --primary-tint: #F3E2E0;
   --primary-pastel: #D2A2A4; /* the given pastel itself, used for soft fills */
 
@@ -26,12 +26,12 @@
   --accent-alt-ink: #8A5E4D;
 
   /* ---- Semantic colors, softened to match the pastel family ---- */
-  --ok: #7C9D82;
+  --ok: #5A725F;
   --ok-tint: #EBF2EA;
-  --warn: #C99A5C;
+  --warn: #87673E;
   --warn-tint: #F8F0E1;
-  --danger: #BD7568;
-  --danger-dark: #935B51;
+  --danger: #935B51;
+  --danger-dark: #794B42;
   --danger-tint: #F7E8E2;
   --muted: #AFA19D;
   --muted-tint: #F3EDE9;
@@ -98,6 +98,11 @@ html[data-theme="dark"] .nav-link.active { box-shadow: none; border: 1px solid r
 
 /* ---- ChamPet palette (light) ---- */
 html[data-palette="champet"] {
+  /* Light-palette accents darkened to WCAG AA 2026-08-24: these carry white
+     button text AND are used as badge text on their own tint, and both uses
+     were failing (2.2-3.6:1). Hue and saturation are unchanged — only
+     lightness — and each -dark hover was re-derived to stay deeper than its
+     new base. See COMPARISON.md §13. */
   --bg: #F5F8FA;
   --paper: #FFFFFF;
   --ink: #212B3D;
@@ -105,8 +110,8 @@ html[data-palette="champet"] {
   --line: #E2E8EF;
   --line-soft: #EEF2F6;
 
-  --primary: #1B9CBE;
-  --primary-dark: #147089;
+  --primary: #157792;
+  --primary-dark: #116278;
   --primary-tint: #E3F5FA;
   --primary-pastel: #6BC0D6; /* derived: same ~40% primary→tint blend ratio as Vetzone's own pastel */
 
@@ -126,12 +131,12 @@ html[data-palette="champet"] {
   --accent-alt-tint: #EFEBF7;
   --accent-alt-ink: #4E4478;
 
-  --ok: #4C9B79;
+  --ok: #3C795F;
   --ok-tint: #E9F4EE;
-  --warn: #C08A3C;
+  --warn: #8E662D;
   --warn-tint: #FAF1E1;
-  --danger: #C15B4E;
-  --danger-dark: #97473D;
+  --danger: #AA5045;
+  --danger-dark: #8B4239;
   --danger-tint: #FAEAE7;
   --muted: #9BA5B7;
   --muted-tint: #EEF1F5;
