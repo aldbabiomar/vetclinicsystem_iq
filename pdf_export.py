@@ -488,6 +488,11 @@ def export_boarding_pdf(db, boarding_id):
     bill_rows = [
         ["Price per Day", f"{b['price_per_day']:,.0f} IQD" if b["price_per_day"] is not None else "\u2014"],
     ]
+    pre_cleanup_total = money.round_to_denomination(summary["subtotal"] * (1 - summary["discount_percent"] / 100))
+    if summary["discount_percent"] or summary["cleanup_amount"]:
+        bill_rows.append(["Subtotal", f"{summary['subtotal']:,.0f} IQD"])
+    if summary["discount_percent"]:
+        bill_rows.append([f"Discount ({summary['discount_percent']:.0f}%)", f"-{summary['subtotal'] - pre_cleanup_total:,.0f} IQD"])
     if summary["cleanup_amount"]:
         bill_rows.append(["Clean Up", f"-{summary['cleanup_amount']:,.0f} IQD"])
     bill_rows.append(["Total", f"{summary['total']:,.0f} IQD"])

@@ -141,6 +141,14 @@ INCREMENTAL_SCHEMA_STATEMENTS = [
     "ALTER TABLE refunds ADD COLUMN IF NOT EXISTS refund_method TEXT",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TEXT",
     "ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT",
+    # Boarding gained a discount, matching what visits and inpatient cases
+    # already had. Postgres has no ADD CONSTRAINT IF NOT EXISTS, hence the
+    # DROP/ADD pair using its own default FK naming.
+    "ALTER TABLE boarding_sessions ADD COLUMN IF NOT EXISTS discount_percent DOUBLE PRECISION NOT NULL DEFAULT 0",
+    "ALTER TABLE boarding_sessions ADD COLUMN IF NOT EXISTS discount_applied_by TEXT",
+    "ALTER TABLE boarding_sessions DROP CONSTRAINT IF EXISTS boarding_sessions_discount_applied_by_fkey",
+    "ALTER TABLE boarding_sessions ADD CONSTRAINT boarding_sessions_discount_applied_by_fkey "
+    "FOREIGN KEY (discount_applied_by) REFERENCES users(id) ON DELETE RESTRICT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_idempotency_key ON sales(idempotency_key) WHERE idempotency_key IS NOT NULL",
     # NOTE: if this database already has two or more owners sharing the
     # same non-null phone number (the exact duplicate-owner bug this
