@@ -10,7 +10,7 @@
 
 <div id="appt-region">
 {% if not has_vet_columns and current_role == 'Admin' %}
-<div class="flash warn" style="background:var(--warn-tint); color:var(--warn); margin-bottom:16px;">
+<div class="flash warn" style="background:var(--warn-tint); color:var(--warn-ink); margin-bottom:16px;">
   <a href="{{ url_for('admin_users') }}" style="color:inherit; text-decoration:underline; font-weight:inherit;">No role is currently marked "Can be assigned as a vet," so there's nothing to schedule against below. Turn it on for at least one role in Users &amp; Roles →</a>
 </div>
 {% endif %}
