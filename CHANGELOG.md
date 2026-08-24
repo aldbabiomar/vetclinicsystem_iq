@@ -3,6 +3,15 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.8.0] - 2026-08-24
+
+### Changed
+- **Accent colours are slightly deeper so text on them is properly
+  readable.** Status chips like "Never audited" were the worst affected —
+  they were previously very hard to read against their own background.
+  Buttons are clearer too. The colours are the same hues, just darker;
+  the sidebar, backgrounds and overall look are unchanged.
+
 ## [1.7.6] - 2026-08-24
 
 ### Fixed
