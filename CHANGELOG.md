@@ -3,6 +3,15 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.7.6] - 2026-08-24
+
+### Fixed
+- **Buttons in dark mode were hard to read** — white text on the softer
+  dark-mode colours. The label now uses a dark tone on those buttons, so
+  they're clearly legible. The colours themselves are unchanged.
+- Date and time pickers, dropdown lists and scrollbars stayed light in
+  dark mode, showing as bright patches. They now follow the theme.
+
 ## [1.7.5] - 2026-08-24
 
 ### Fixed
