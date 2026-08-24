@@ -23,6 +23,7 @@
   /* ---- Warm tan accent (#d7bbb2), used for secondary highlights ---- */
   --accent-tan: #D7BBB2;
   --accent-tan-tint: #F6ECE7;
+  --accent-tan-ink: #8A5E4D;
 
   /* ---- Semantic colors, softened to match the pastel family ---- */
   --ok: #7C9D82;
@@ -30,6 +31,7 @@
   --warn: #C99A5C;
   --warn-tint: #F8F0E1;
   --danger: #BD7568;
+  --danger-dark: #935B51;
   --danger-tint: #F7E8E2;
   --muted: #AFA19D;
   --muted-tint: #F3EDE9;
@@ -64,12 +66,14 @@ html[data-theme="dark"] {
 
   --accent-tan: #D7BBB2;
   --accent-tan-tint: #3A2E28;
+  --accent-tan-ink: #F1D9CD;
 
   --ok: #93C299;
   --ok-tint: #1E2B20;
   --warn: #DDB077;
   --warn-tint: #332812;
   --danger: #D98E80;
+  --danger-dark: #EF9C8D;
   --danger-tint: #3A211D;
   --muted: #9C8C89;
   --muted-tint: #292221;
@@ -78,9 +82,6 @@ html[data-theme="dark"] {
   --shadow: 0 2px 10px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
   --shadow-lg: 0 16px 48px rgba(0,0,0,0.55);
 }
-/* Same rose-on-tan chip used on the appointments grid needs a lighter ink in dark mode
-   to stay legible against the darkened tan tint (value only, same chip/markup). */
-html[data-theme="dark"] .appt-chip.grooming { color: #F1D9CD; }
 /* Sidebar active state loses its white card look in dark mode; keep it a visible,
    same-purpose highlight instead of white-on-white. */
 html[data-theme="dark"] .nav-link.active { box-shadow: none; border: 1px solid rgba(243,233,230,0.14); }
@@ -107,12 +108,14 @@ html[data-palette="champet"] {
 
   --accent-tan: #8478B0;       /* placeholder — needs sign-off, see plan's gap note */
   --accent-tan-tint: #EFEBF7;  /* placeholder, paired with the above */
+  --accent-tan-ink: #4E4478;   /* derived from the placeholder accent — resign off together */
 
   --ok: #4C9B79;
   --ok-tint: #E9F4EE;
   --warn: #C08A3C;
   --warn-tint: #FAF1E1;
   --danger: #C15B4E;
+  --danger-dark: #97473D;
   --danger-tint: #FAEAE7;
   --muted: #9BA5B7;
   --muted-tint: #EEF1F5;
@@ -144,12 +147,14 @@ html[data-palette="champet"][data-theme="dark"] {
 
   --accent-tan: #8478B0;     /* unchanged from light, same pattern as Vetzone's accent-tan */
   --accent-tan-tint: #2A2438;
+  --accent-tan-ink: #E4DEF2;
 
   --ok: #6FBE9B;
   --ok-tint: #1B2E24;
   --warn: #DDA85E;
   --warn-tint: #33270F;
   --danger: #DD8172;
+  --danger-dark: #F38E7D;
   --danger-tint: #33201B;
   --muted: #8791A8;
   --muted-tint: #232838;
@@ -158,11 +163,6 @@ html[data-palette="champet"][data-theme="dark"] {
   --shadow: 0 2px 10px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
   --shadow-lg: 0 16px 48px rgba(0,0,0,0.55);
 }
-
-/* Component-level dark-mode fix, mirroring the one Vetzone needs at the
-   .appt-chip.grooming rule above, for the same reason under ChamPet's own
-   accent-tan hue: */
-html[data-palette="champet"][data-theme="dark"] .appt-chip.grooming { color: #E4DEF2; }
 
 html, body {
   transition: background-color 0.2s ease, color 0.2s ease;
@@ -293,7 +293,7 @@ html[data-theme="dark"] .theme-toggle-btn .icon-moon { display: block; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 18px 0 4px; }
 .pagination-info { font-size: 13px; color: var(--ink-soft); }
 .btn.danger { background: var(--danger); }
-.btn.danger:hover { background: #8f4a41; }
+.btn.danger:hover { background: var(--danger-dark); }
 .btn.ok { background: var(--ok); }
 .btn.ok:hover { opacity: 0.9; }
 .actions-cell { max-width: 300px; }
@@ -546,7 +546,7 @@ textarea { resize: vertical; min-height: 72px; }
 .appt-head-cell { background: var(--muted-tint); font-weight: 700; font-size: 12px; padding: 9px 6px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line-soft); text-align: center; }
 .appt-slot-label { background: var(--muted-tint); font-size: 11px; color: var(--ink-soft); font-weight: 700; display: flex; align-items: center; justify-content: center; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line-soft); }
 .appt-chip { background: var(--primary-tint); color: var(--primary-dark); border-radius: 6px; padding: 3px 6px; font-size: 11px; font-weight: 600; margin-bottom: 3px; cursor: pointer; }
-.appt-chip.grooming { background: var(--accent-tan-tint); color: #8A5E4D; }
+.appt-chip.grooming { background: var(--accent-tan-tint); color: var(--accent-tan-ink); }
 .appt-add-btn { width: 100%; border: 1px dashed var(--line); background: none; color: var(--muted); border-radius: 6px; font-size: 11px; padding: 3px; cursor: pointer; }
 .appt-add-btn:hover { background: var(--muted-tint); }
 
