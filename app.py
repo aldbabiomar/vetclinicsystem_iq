@@ -2422,6 +2422,19 @@ def visit_billing_save(visit_id):
             return redirect(url_for("visits_list"))
         return render_template("visit_detail.html", **ctx, form=f)
 
+    # The visit has to exist before anything is written against it. Without
+    # this, a POST naming a visit_id that isn't there sailed past every
+    # validation branch -- redisplay() carries the only other "Visit not
+    # found" check, and it runs only when validation *fails* -- and died on
+    # billing_visit_id_fkey at the INSERT, showing the user an error page
+    # instead of a message. Nothing was ever written (the foreign key saw to
+    # that), so this is a clean-degradation fix, not a data-integrity one.
+    # Found by tests/test_money_routes.py; JO has had this guard.
+    # Taken FOR UPDATE so a concurrent discount save on the same visit
+    # serialises behind this one rather than interleaving with it.
+    if not db.execute("SELECT id FROM visits WHERE id=? FOR UPDATE", (visit_id,)).fetchone():
+        flash("Visit not found.", "error")
+        return redirect(url_for("visits_list"))
     billing_type = f.get("billing_type", "Automatic")
     if billing_type not in BILLING_TYPES:
         flash("Billing type must be one of: " + ", ".join(BILLING_TYPES) + ".", "error")
