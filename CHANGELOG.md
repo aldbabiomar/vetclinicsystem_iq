@@ -3,6 +3,15 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.10.2] - 2026-08-25
+
+### Fixed
+- **Impossibly large prices and amounts are now refused when you type
+  them.** A number far beyond any real bill used to be accepted into a
+  price or amount field and only rejected later, by the database, as an
+  unhelpful error. It is now caught at the field with a clear message.
+  Normal amounts are unaffected.
+
 ## [1.10.1] - 2026-08-25
 
 ### Fixed
