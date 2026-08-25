@@ -3,6 +3,15 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.10.1] - 2026-08-25
+
+### Fixed
+- **A malformed date in a page's web address no longer shows an error
+  page.** Hand-editing the `?date=` part of the address on Visits or
+  Refunds to something that started with a real date but had extra
+  characters after it produced a blank error page; it now tells you the
+  date wasn't valid and shows all dates, the same as any other bad date.
+
 ## [1.10.0] - 2026-08-25
 
 ### Changed
