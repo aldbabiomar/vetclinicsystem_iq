@@ -279,6 +279,36 @@ server machine. If you ever need to move the database to its own server,
 just point `DATABASE_URL` in `.env` at that server instead of the local
 Docker container — nothing else in the app needs to change.
 
+## Running the tests
+
+The money math — totals, discounts, the 250 IQD note rounding, write-offs
+— is the part of this app most worth checking on every change, and the
+part where a mistake is least visible: a wrong colour is obvious, a wrong
+total is a bill someone already paid. `tests/test_money.py` covers it.
+
+The tests need no database, no Docker and no running app. From the repo
+root, with the same virtual environment you set up in Quick start:
+
+```
+venv/bin/python -m pip install pytest
+venv/bin/python -m pytest tests/ -q
+```
+
+(They import `app.py`, so they need the app's own dependencies — which is
+why they run from that venv rather than a bare Python.)
+
+Everything should pass in well under a second. If something fails,
+**read what it says before changing it**: several of these tests exist
+because the bug they describe already happened once. The rounding tests
+in particular encode the difference between half-up and Python's default
+banker's rounding, which is the difference between a 125 IQD charge and
+a free one.
+
+**A warning if you also work on VetClinicSystem JO:** the two apps'
+`test_money.py` files make deliberately *opposite* assertions, because
+JOD is an exact 3-decimal currency with no note rounding. Never copy one
+over the other. See `COMPARISON.md` §1.1 in the shared workspace folder.
+
 ## Your data
 
 Everything lives in PostgreSQL (inside the `vetclinicsystemiq_pgdata` Docker volume) —
