@@ -140,6 +140,12 @@ INCREMENTAL_SCHEMA_STATEMENTS = [
     "ALTER TABLE inventory_list ADD COLUMN IF NOT EXISTS consignment_since TEXT",
     "ALTER TABLE refunds ADD COLUMN IF NOT EXISTS refund_method TEXT",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TEXT",
+    # Tightened to match JO 2026-08-24: the column had been nullable here and
+    # NOT NULL DEFAULT '' there. Backfill must precede SET NOT NULL or the
+    # ALTER fails on any existing NULL. All three are idempotent.
+    "UPDATE users SET password_changed_at = '' WHERE password_changed_at IS NULL",
+    "ALTER TABLE users ALTER COLUMN password_changed_at SET DEFAULT ''",
+    "ALTER TABLE users ALTER COLUMN password_changed_at SET NOT NULL",
     "ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT",
     # Boarding gained a discount, matching what visits and inpatient cases
     # already had. Postgres has no ADD CONSTRAINT IF NOT EXISTS, hence the

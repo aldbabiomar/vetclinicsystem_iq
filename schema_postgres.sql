@@ -89,10 +89,10 @@ CREATE TABLE IF NOT EXISTS users (
     -- Stamped on every password change/reset; compared against the value
     -- captured in the session at login time on every request, so a
     -- session predating the current password stops working immediately
-    -- instead of staying valid until it naturally expires. NULL on a
-    -- never-changed row is treated as "no invalidation point yet" —
-    -- harmless, just means an old session survives until its own expiry.
-    password_changed_at TEXT,
+    -- instead of staying valid until it naturally expires. An empty string
+    -- on a never-changed row means "no invalidation point yet" — harmless,
+    -- just means an old session survives until its own expiry.
+    password_changed_at TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role_id);

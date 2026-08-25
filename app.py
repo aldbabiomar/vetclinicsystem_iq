@@ -773,9 +773,13 @@ def require_login():
     # very next request instead of staying valid for up to
     # PERMANENT_SESSION_LIFETIME after the password was changed — matters
     # most right when an admin resets a suspected-compromised account.
-    # None on both sides (an account whose password has never been
-    # changed since this column existed) is not a mismatch.
-    if session.get("password_changed_at") != user["password_changed_at"]:
+    # An empty stored value — an account whose password has never been
+    # changed since this column existed, or a session predating this check —
+    # means there is nothing to compare against yet, not an automatic
+    # mismatch. This guard used to be unnecessary here because the column was
+    # nullable and NULL == None compared equal; it is required now that the
+    # column is NOT NULL DEFAULT '' (matching JO), since None != ''.
+    if user["password_changed_at"] and session.get("password_changed_at") != user["password_changed_at"]:
         session.clear()
         return redirect(url_for("login", next=request.path))
     auth.refresh_session_permissions(db, user)

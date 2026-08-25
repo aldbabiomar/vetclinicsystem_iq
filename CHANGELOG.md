@@ -3,6 +3,21 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.10.0] - 2026-08-25
+
+### Changed
+- **Password-change stamps are now stored consistently.** The field that
+  records when an account's password last changed no longer allows a
+  blank-as-missing value, which keeps the "log out sessions older than
+  the current password" protection behaving the same for every account.
+  Applied automatically on update — accounts that have never had a
+  password change are filled in for you, and **nobody is signed out by
+  this change.** No action needed from you.
+
+### Fixed
+- Sessions belonging to an account whose password has never been changed
+  are no longer at risk of being signed out unexpectedly after updating.
+
 ## [1.9.0] - 2026-08-24
 
 ### Added
