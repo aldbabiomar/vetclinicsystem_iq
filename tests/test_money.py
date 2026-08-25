@@ -81,13 +81,34 @@ def test_parse_money_allows_negative_by_design():
     assert app.parse_money("-500") == -500
 
 
-def test_parse_money_has_no_upper_bound_in_iq():
-    """Documents a real divergence rather than asserting a bound that does
-    not exist: JO caps money input at MAX_MONEY and raises BadNumber; IQ has
-    no such ceiling and relies on the reactive NumericValueOutOfRange
-    handler once the value reaches the database. If IQ ever gains a cap,
-    this test should be replaced by the JO-style bound test, not deleted."""
-    assert app.parse_money("1000000000000000000") == 1e18
+def test_parse_money_rejects_absurd_values():
+    """IQ's money columns are DOUBLE PRECISION, so unlike JO's NUMERIC(12,3)
+    there is no structural ceiling — this bound is a deliberate sanity check.
+    It was added after these tests first found IQ accepting 1e18 as a price
+    while JO rejected it."""
+    assert app.parse_money(str(app.MAX_MONEY)) == app.MAX_MONEY
+    with pytest.raises(app.BadNumber):
+        app.parse_money(str(app.MAX_MONEY + 1))
+    with pytest.raises(app.BadNumber):
+        app.parse_money("1000000000000000000")
+
+
+def test_money_bound_stays_below_float64_exact_integer_limit():
+    """Not arbitrary: IQ's money model does integer arithmetic on these
+    values (round_to_denomination's `% 250`, is_denomination_valid), which
+    stops being exact above 2**53. A future "let's raise the cap" must not
+    quietly cross that line."""
+    assert app.MAX_MONEY < 2 ** 53
+    assert float(app.MAX_MONEY).is_integer()
+    assert (app.MAX_MONEY + 1) - app.MAX_MONEY == 1   # still exact at the cap
+
+
+def test_negative_values_are_bounded_by_magnitude_too():
+    """A refund or adjustment can legitimately be negative; an absurd one
+    should be rejected on size, not waved through because of its sign."""
+    assert app.parse_money("-1000") == -1000
+    with pytest.raises(app.BadNumber):
+        app.parse_money("-1000000000000000000")
 
 
 # ---------------------------------------------------------------------------

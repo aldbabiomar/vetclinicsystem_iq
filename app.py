@@ -353,8 +353,26 @@ def parse_money(raw, required=False):
     # the fix instead of needing its own guard.
     if not math.isfinite(val):
         raise BadNumber(raw)
+    if abs(val) > MAX_MONEY:
+        raise BadNumber(f"{raw} is too large — check for a typo.")
     return val
 
+
+# Unlike JO -- whose money columns are NUMERIC(12,3) and so carry a real
+# structural ceiling -- IQ's 67 money columns are DOUBLE PRECISION, which has
+# no meaningful upper limit of its own. This bound is therefore a deliberate
+# sanity check rather than a column limit, chosen so that:
+#   - it mirrors JO's twelve significant digits, keeping the two apps'
+#     rejection behaviour comparable (~763M USD at 1310 IQD/USD, far past any
+#     real clinic bill -- this catches a typo or a hostile value, not a big
+#     invoice); and
+#   - it sits ~9000x below 2**53, the largest integer float64 represents
+#     exactly. That matters here specifically: IQ's money model does integer
+#     arithmetic on these values (round_to_denomination's `% 250`,
+#     is_denomination_valid), which silently stops being exact above 2**53.
+# Applies to input only -- parse_money() is never used to read a stored row,
+# so summed report figures are unaffected by it.
+MAX_MONEY = 999_999_999_999
 
 MAX_INT = 2_147_483_647  # widest value any INTEGER column in this schema can hold
 
