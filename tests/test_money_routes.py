@@ -703,3 +703,87 @@ def test_service_refund_requires_a_payout_method(client, db, visit):
     finally:
         db.execute("DELETE FROM refunds WHERE visit_id=?", (visit["visit_id"],))
         db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Visit payments — the fourth money surface (visits, inpatient, boarding, POS)
+# ---------------------------------------------------------------------------
+
+def _pay_visit(client, visit_id, **data):
+    return client.post(f"/visits/{visit_id}/payment", data=data, follow_redirects=False)
+
+
+def _payments_for(db, visit_id):
+    return db.execute("SELECT * FROM payments WHERE visit_id=? ORDER BY id", (visit_id,)).fetchall()
+
+
+def test_visit_payment_is_recorded(client, db, visit):
+    _bill(client, visit["visit_id"], billing_type="Manual", manual_amount="10000")
+    _pay_visit(client, visit["visit_id"], amount="4000", method="Cash")
+    rows = _payments_for(db, visit["visit_id"])
+    assert len(rows) == 1
+    assert rows[0]["amount"] == 4000.0
+
+
+def test_visit_payment_cannot_exceed_the_balance(client, db, visit):
+    """Overpaying a visit has no undo — there is no delete route for a
+    payment, so the money can only be corrected by issuing a refund."""
+    _bill(client, visit["visit_id"], billing_type="Manual", manual_amount="10000")
+    resp = _pay_visit(client, visit["visit_id"], amount="15000", method="Cash")
+    assert resp.status_code == 200
+    assert _payments_for(db, visit["visit_id"]) == []
+
+
+def test_visit_payments_accumulate_against_one_balance(client, db, visit):
+    """Each instalment is individually within the balance; together they must
+    not exceed it. Checking only the current payment is how a bill gets
+    overpaid across several small ones."""
+    _bill(client, visit["visit_id"], billing_type="Manual", manual_amount="10000")
+    for _ in range(4):
+        _pay_visit(client, visit["visit_id"], amount="2500", method="Cash")
+    paid = sum(r["amount"] for r in _payments_for(db, visit["visit_id"]))
+    assert paid == 10000.0
+    resp = _pay_visit(client, visit["visit_id"], amount="2500", method="Cash")
+    assert resp.status_code == 200, "the instalment that would tip it over must be refused"
+    assert sum(r["amount"] for r in _payments_for(db, visit["visit_id"])) == paid
+
+
+def test_visit_payment_rejects_zero_and_negative(client, db, visit):
+    _bill(client, visit["visit_id"], billing_type="Manual", manual_amount="10000")
+    for bad in ("0", "-1000"):
+        resp = _pay_visit(client, visit["visit_id"], amount=bad, method="Cash")
+        assert resp.status_code == 200
+    assert _payments_for(db, visit["visit_id"]) == []
+
+
+def test_visit_payment_rejects_a_non_numeric_amount(client, db, visit):
+    _bill(client, visit["visit_id"], billing_type="Manual", manual_amount="10000")
+    resp = _pay_visit(client, visit["visit_id"], amount="abc", method="Cash")
+    assert resp.status_code == 200
+    assert _payments_for(db, visit["visit_id"]) == []
+
+
+def test_visit_payment_on_a_missing_visit_is_refused(client, db):
+    resp = _pay_visit(client, "NOPE-NOT-A-VISIT", amount="1000", method="Cash")
+    assert resp.status_code != 500, "must degrade, not raise"
+    assert db.execute("SELECT * FROM payments WHERE visit_id=?",
+                      ("NOPE-NOT-A-VISIT",)).fetchall() == []
+
+
+def test_visit_cleanup_write_off_reduces_the_balance(client, db, visit):
+    """Clean Up on a visit behaves like it does everywhere else: capped, and
+    it lowers what is still owed rather than counting as a payment."""
+    _bill(client, visit["visit_id"], billing_type="Manual", manual_amount="10000")
+    _pay_visit(client, visit["visit_id"], amount="9000", method="Cash", cleanup_amount="1000")
+    row = db.execute("SELECT * FROM billing WHERE visit_id=?", (visit["visit_id"],)).fetchone()
+    assert row["cleanup_amount"] == 1000
+    summary = logic.visit_billing_summary(db, visit["visit_id"])
+    assert summary["balance"] <= 0.5, "the bill should now be settled"
+
+
+def test_visit_cleanup_above_the_cap_is_refused(client, db, visit):
+    _bill(client, visit["visit_id"], billing_type="Manual", manual_amount="10000")
+    resp = _pay_visit(client, visit["visit_id"], amount="1000", method="Cash",
+                      cleanup_amount=str(money.CLEANUP_CAP + 250))
+    assert resp.status_code == 200
+    assert _payments_for(db, visit["visit_id"]) == []
