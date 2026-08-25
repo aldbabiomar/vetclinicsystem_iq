@@ -3,6 +3,13 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.10.4] - 2026-08-25
+
+### Fixed
+- **Recording a consignment settlement for a distributor with no
+  consignment history** showed an error page instead of a message. Nothing
+  was ever saved; it now says there is nothing to settle.
+
 ## [1.10.3] - 2026-08-25
 
 ### Fixed
