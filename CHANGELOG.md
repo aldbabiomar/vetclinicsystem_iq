@@ -3,6 +3,14 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.10.6] - 2026-08-26
+
+### Fixed
+- **Updating from an older version could fail with a database error.** An
+  install running a release from before the duplicate-sale protection was
+  added would abort partway through applying the update and roll back,
+  with no explanation. Updating now works from any earlier version.
+
 ## [1.10.5] - 2026-08-25
 
 ### Fixed
