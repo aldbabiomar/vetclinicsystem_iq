@@ -3,6 +3,14 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.10.3] - 2026-08-25
+
+### Fixed
+- **Saving a bill for a visit that no longer exists now shows a clear
+  message** instead of an error page. Nothing was ever saved in that
+  case, but the error page made it look as though something had gone
+  badly wrong.
+
 ## [1.10.2] - 2026-08-25
 
 ### Fixed
