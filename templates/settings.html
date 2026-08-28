@@ -3,10 +3,12 @@
 {% block content %}
 <div class="page-head"><div><h1>Settings</h1><p class="page-sub">Clinic info, inventory alert thresholds, appointment hours, and the automatic backup folder. Staff on the clinic network can reach this app at <strong>http://{{ lan_address }}:5050</strong>.</p></div></div>
 
-<div class="card">
+<div class="card has-save-bar">
+<div class="settings-card-head"><h2>Clinic Settings</h2><span class="settings-tag saved">Saved with the button below</span></div>
+<p class="small muted" style="margin:2px 0 0;">Nothing here takes effect until you press Save Settings.</p>
 <form method="post" data-track-unsaved>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <div class="section-title" style="margin-top:0;">Clinic</div>
+  <div class="section-title">Clinic</div>
   <div class="form-grid">
     <div class="field"><label>Clinic Name</label><input name="clinic_name" value="{{ settings.clinic_name }}"></div>
     <div class="field"><label>Location</label><input name="clinic_location" value="{{ settings.clinic_location }}"></div>
@@ -34,7 +36,7 @@
 
   <div class="section-title">Backups</div>
   <div class="form-grid">
-    <div class="field"><label>Backup Folder (on this computer)</label>
+    <div class="field full"><label>Backup Folder (on this computer)</label>
       <div style="display:flex; gap:8px;">
         <input name="backup_dir" id="backupDirInput" placeholder="e.g. /Users/you/VetClinicSystemBackups or D:\VetClinicSystemBackups" value="{{ settings.backup_dir }}" style="flex:1;">
         <button class="btn secondary" type="button" onclick="openFolderBrowser('backupDirInput', {filePicker:false})">Browse…</button>
@@ -78,7 +80,7 @@
     the system gets told, which is the one thing the app cannot report while it is switched off.
   </p>
   <div class="form-grid">
-    <div class="field" style="grid-column:1 / -1;">
+    <div class="field full">
       <label>Monitoring Ping URL</label>
       <input name="heartbeat_url" type="url" placeholder="https://… (leave blank to disable)"
              value="{{ settings.heartbeat_url or '' }}" autocomplete="off" spellcheck="false">
@@ -89,7 +91,7 @@
       </p>
     </div>
     {% if settings.heartbeat_install_id %}
-    <div class="field" style="grid-column:1 / -1;">
+    <div class="field full">
       <label>This Install's ID</label>
       <div class="small" style="font-family:monospace; padding:8px 10px; background:var(--muted-tint); border-radius:6px;">{{ settings.heartbeat_install_id }}</div>
       <p class="small muted" style="margin:6px 0 0;">Included in every ping so one monitoring account can watch several clinics.</p>
@@ -97,10 +99,103 @@
     {% endif %}
   </div>
 
-  <div class="form-actions"><button class="btn" type="submit">Save Settings</button></div>
+  <div class="settings-save-bar">
+    <span class="what">Saves the six sections above.</span>
+    <button class="btn" type="submit">Save Settings</button>
+  </div>
 </form>
+</div>
 
 {% if is_system_admin %}
+
+<div class="card">
+<div class="settings-card-head"><h2>Backups &amp; Restore</h2><span class="settings-tag now">Runs when you click</span></div>
+<p class="small muted" style="margin:2px 0 0;">The backup history and the restore that reads it, beside the folder they use.</p>
+<form method="post" action="{{ url_for('settings_backup_now') }}" id="backupNowForm" style="margin-top:10px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button class="btn secondary" type="submit" id="backupNowBtn" data-saving-label="Backing up…"
+          {{ 'disabled' if not settings.backup_dir }}>Back Up Now</button>
+  {% if not settings.backup_dir %}
+  <p class="small muted" style="margin:6px 0 0;">Set a backup folder above and save, then you can back up.</p>
+  {% endif %}
+</form>
+<div id="backupProgress" class="vz-progress-panel" style="display:none;"></div>
+
+
+{% if recent_backups %}
+<div class="section-title">Recent Backups</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Started</th><th>Triggered By</th><th>Status</th><th>Size</th><th>File</th></tr></thead>
+  <tbody>
+    {% for b in recent_backups %}
+    <tr>
+      <td>{{ b.started_at }}</td>
+      <td class="muted">{{ (b.triggered_by or "—") | title }}</td>
+      <td>{% if b.status == 'success' %}<span class="badge">Success</span>{% elif b.status == 'failed' %}<span class="badge danger">Failed — {{ b.error }}</span>{% else %}<span class="badge warn">Running</span>{% endif %}</td>
+      <td>{{ (b.filesize_bytes / 1024 / 1024) | round(1) if b.filesize_bytes else "—" }}{% if b.filesize_bytes %} MB{% endif %}</td>
+      <td class="muted">{{ b.filepath or "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+
+<div class="section-title">Restore From Backup</div>
+{% if incomplete_restore %}
+<div class="flash warn" style="background:var(--warn-tint); color:var(--warn-ink); margin-bottom:12px;">
+  A restore may not have completed — the app was stopped or crashed partway through the last one.
+  Check the database carefully before continuing to use the app.
+</div>
+{% endif %}
+<p class="small muted" style="margin-top:-6px;">
+  Replaces <strong>all</strong> current data in VetClinicSystem IQ with the contents of a backup file. This can't be undone —
+  take a fresh backup first if you're not sure. Uploaded files (X-rays, lab results) aren't part of the backup
+  itself and are unaffected by a restore, but any that were attached <em>after</em> the backup being restored was
+  taken will need reconnecting — run <code>python3 reconcile_attachments.py</code> from the app folder afterward
+  to find and relink them safely.
+</p>
+<div class="form-grid">
+  <div class="field full"><label>Backup File To Restore</label>
+    <div style="display:flex; gap:8px;">
+      <input id="restoreFileInput" placeholder="Browse to a .dump backup file" value="" style="flex:1;" readonly>
+      <button class="btn secondary" type="button" onclick="openFolderBrowser('restoreFileInput', {filePicker:true, ext:'.dump'})">Browse…</button>
+    </div>
+  </div>
+</div>
+<form method="post" action="{{ url_for('settings_restore_now') }}" id="restoreForm" style="margin-top:10px;"
+      data-confirm="This replaces ALL current data in VetClinicSystem IQ with the contents of this backup file, and cannot be undone. Everything added or changed since that backup was taken will be lost. Continue?">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="source_file" id="restoreSourceFile">
+  <button class="btn danger" type="submit" id="restoreSubmitBtn" data-saving-label="Restoring…" disabled>Restore Now</button>
+</form>
+<div id="restoreProgress" class="vz-progress-panel" style="display:none;"></div>
+
+
+{% if recent_restores %}
+<div class="section-title">Recent Restores</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Started</th><th>Triggered By</th><th>Status</th><th>Source File</th></tr></thead>
+  <tbody>
+    {% for r in recent_restores %}
+    <tr>
+      <td>{{ r.started_at }}</td>
+      <td class="muted">{{ (r.triggered_by or "—") | title }}</td>
+      <td>{% if r.status == 'success' %}<span class="badge">Success</span>{% else %}<span class="badge danger">Failed — {{ r.error }}</span>{% endif %}</td>
+      <td class="muted">{{ r.source_file or "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+</div>
+
+<div class="card">
+<div class="settings-card-head"><h2>Updates</h2><span class="settings-tag now">Runs when you click</span></div>
 <div class="section-title">Updates</div>
 <div id="updatesConfigured" style="display:none;">
   <div class="detail-item"><div class="k">Current Version</div><div class="v" id="updCurrentVersion">VetClinicSystem IQ v{{ app_version }}</div></div>
@@ -125,6 +220,46 @@
   Automatic updates aren't set up on this install yet. An administrator can enable them by running
   <code>python3 setup.py --enable-updates</code> on the computer running VetClinicSystem IQ.
 </div>
+</div>
+
+<div class="card">
+<div class="settings-card-head"><h2>Startup &amp; Shutdown</h2><span class="settings-tag now">Applies immediately</span></div>
+{# This section is deliberately its own <form>, separate from the tracked
+   settings form above (data-track-unsaved marks that whole form "dirty"
+   on ANY field change inside it, which would make submitting this
+   checkbox's own form get caught by that same form's "you have unsaved
+   changes elsewhere" guard the instant the checkbox was touched). It's
+   also a genuinely different kind of action anyway: an OS-level toggle
+   (installing/removing a login item) that applies immediately, not a
+   settings-table field waiting on a general Save Settings click. #}
+<div class="section-title">Startup &amp; Shutdown</div>
+<form method="post" action="{{ url_for('settings_autostart') }}" id="autostartForm">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="form-grid">
+    <div class="field full">
+      <label class="radio-row" style="font-weight:600;">
+        <input type="checkbox" name="autostart_enabled" id="autostartCheckbox"
+               {% if autostart_enabled %}checked{% endif %}
+               {% if not autostart_supported %}disabled{% endif %}
+               onchange="document.getElementById('autostartForm').requestSubmit();">
+        Start VetClinicSystem IQ automatically when this computer starts
+      </label>
+      {% if autostart_supported %}
+      <p class="small muted" style="margin:4px 0 0;">
+        On shutdown or restart, the app takes a final backup and shuts down cleanly before the
+        computer powers off, so nothing is left mid-write.
+      </p>
+      {% else %}
+      <p class="small muted" style="margin:4px 0 0;">
+        Not available on this operating system — start VetClinicSystem IQ manually using the launcher.
+      </p>
+      {% endif %}
+    </div>
+  </div>
+</form>
+
+</div>
+
 <script>
 async function loadUpdatesStatus() {
   try {
@@ -236,119 +371,6 @@ async function rollbackUpdate() {
 </script>
 {% endif %}
 
-{# This section is deliberately its own <form>, separate from the tracked
-   settings form above (data-track-unsaved marks that whole form "dirty"
-   on ANY field change inside it, which would make submitting this
-   checkbox's own form get caught by that same form's "you have unsaved
-   changes elsewhere" guard the instant the checkbox was touched). It's
-   also a genuinely different kind of action anyway: an OS-level toggle
-   (installing/removing a login item) that applies immediately, not a
-   settings-table field waiting on a general Save Settings click. #}
-<div class="section-title">Startup &amp; Shutdown</div>
-<form method="post" action="{{ url_for('settings_autostart') }}" id="autostartForm">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <div class="form-grid">
-    <div class="field full">
-      <label class="radio-row" style="font-weight:600;">
-        <input type="checkbox" name="autostart_enabled" id="autostartCheckbox"
-               {% if autostart_enabled %}checked{% endif %}
-               {% if not autostart_supported %}disabled{% endif %}
-               onchange="document.getElementById('autostartForm').requestSubmit();">
-        Start VetClinicSystem IQ automatically when this computer starts
-      </label>
-      {% if autostart_supported %}
-      <p class="small muted" style="margin:4px 0 0;">
-        On shutdown or restart, the app takes a final backup and shuts down cleanly before the
-        computer powers off, so nothing is left mid-write.
-      </p>
-      {% else %}
-      <p class="small muted" style="margin:4px 0 0;">
-        Not available on this operating system — start VetClinicSystem IQ manually using the launcher.
-      </p>
-      {% endif %}
-    </div>
-  </div>
-</form>
-
-<form method="post" action="{{ url_for('settings_backup_now') }}" id="backupNowForm" style="margin-top:10px;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button class="btn secondary" type="submit" id="backupNowBtn" data-saving-label="Backing up…"
-          {{ 'disabled' if not settings.backup_dir }}>Back Up Now</button>
-  {% if not settings.backup_dir %}
-  <p class="small muted" style="margin:6px 0 0;">Set a backup folder above and save, then you can back up.</p>
-  {% endif %}
-</form>
-<div id="backupProgress" class="vz-progress-panel" style="display:none;"></div>
-
-{% if recent_backups %}
-<div class="section-title">Recent Backups</div>
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Started</th><th>Triggered By</th><th>Status</th><th>Size</th><th>File</th></tr></thead>
-  <tbody>
-    {% for b in recent_backups %}
-    <tr>
-      <td>{{ b.started_at }}</td>
-      <td class="muted">{{ (b.triggered_by or "—") | title }}</td>
-      <td>{% if b.status == 'success' %}<span class="badge">Success</span>{% elif b.status == 'failed' %}<span class="badge danger">Failed — {{ b.error }}</span>{% else %}<span class="badge warn">Running</span>{% endif %}</td>
-      <td>{{ (b.filesize_bytes / 1024 / 1024) | round(1) if b.filesize_bytes else "—" }}{% if b.filesize_bytes %} MB{% endif %}</td>
-      <td class="muted">{{ b.filepath or "—" }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-</div>
-{% endif %}
-
-<div class="section-title">Restore From Backup</div>
-{% if incomplete_restore %}
-<div class="flash warn" style="background:var(--warn-tint); color:var(--warn-ink); margin-bottom:12px;">
-  A restore may not have completed — the app was stopped or crashed partway through the last one.
-  Check the database carefully before continuing to use the app.
-</div>
-{% endif %}
-<p class="small muted" style="margin-top:-6px;">
-  Replaces <strong>all</strong> current data in VetClinicSystem IQ with the contents of a backup file. This can't be undone —
-  take a fresh backup first if you're not sure. Uploaded files (X-rays, lab results) aren't part of the backup
-  itself and are unaffected by a restore, but any that were attached <em>after</em> the backup being restored was
-  taken will need reconnecting — run <code>python3 reconcile_attachments.py</code> from the app folder afterward
-  to find and relink them safely.
-</p>
-<div class="form-grid">
-  <div class="field full"><label>Backup File To Restore</label>
-    <div style="display:flex; gap:8px;">
-      <input id="restoreFileInput" placeholder="Browse to a .dump backup file" value="" style="flex:1;" readonly>
-      <button class="btn secondary" type="button" onclick="openFolderBrowser('restoreFileInput', {filePicker:true, ext:'.dump'})">Browse…</button>
-    </div>
-  </div>
-</div>
-<form method="post" action="{{ url_for('settings_restore_now') }}" id="restoreForm" style="margin-top:10px;"
-      data-confirm="This replaces ALL current data in VetClinicSystem IQ with the contents of this backup file, and cannot be undone. Everything added or changed since that backup was taken will be lost. Continue?">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <input type="hidden" name="source_file" id="restoreSourceFile">
-  <button class="btn danger" type="submit" id="restoreSubmitBtn" data-saving-label="Restoring…" disabled>Restore Now</button>
-</form>
-<div id="restoreProgress" class="vz-progress-panel" style="display:none;"></div>
-
-{% if recent_restores %}
-<div class="section-title">Recent Restores</div>
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Started</th><th>Triggered By</th><th>Status</th><th>Source File</th></tr></thead>
-  <tbody>
-    {% for r in recent_restores %}
-    <tr>
-      <td>{{ r.started_at }}</td>
-      <td class="muted">{{ (r.triggered_by or "—") | title }}</td>
-      <td>{% if r.status == 'success' %}<span class="badge">Success</span>{% else %}<span class="badge danger">Failed — {{ r.error }}</span>{% endif %}</td>
-      <td class="muted">{{ r.source_file or "—" }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-</div>
-{% endif %}
-</div>
 
 <div id="folderBrowserModal" class="modal-overlay" style="display:none;">
   <div class="modal-box" style="max-width:640px;">
