@@ -25,7 +25,7 @@
 </div>
 
 {% set bill_form = form if show_new_bill_form else None %}
-<div class="card" id="newBillForm" style="display:{{ 'block' if show_new_bill_form else 'none' }}; margin-bottom:20px;">
+<div class="card" id="newBillForm" style="display:{{ 'block' if show_new_bill_form else 'none' }}; margin-bottom:16px;">
   <form method="post" action="{{ url_for('distributor_bill_new', dist_id=distributor.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-grid">
