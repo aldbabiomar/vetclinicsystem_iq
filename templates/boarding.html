@@ -11,7 +11,7 @@
   <a class="chip {{ 'active' if show_all }}" href="{{ url_for('boarding_page', all=1) }}">All (Incl. Picked Up)</a>
 </div>
 
-<div class="card" id="newForm" style="display:{{ 'block' if show_new_form else 'none' }}; margin-bottom:20px;">
+<div class="card" id="newForm" style="display:{{ 'block' if show_new_form else 'none' }}; margin-bottom:16px;">
   <div class="field" style="margin-bottom:12px;">
     <label>Search Patient (Name, Patient ID, Owner Name, or Owner Phone)</label>
     <input type="text" id="patientSearch" autocomplete="off" placeholder="Start Typing…">
