@@ -352,6 +352,35 @@ def _gather(db):
     }
 
 
+def _drop_duplicated_cause(findings):
+    """backup_failing quotes the error from the most recent attempt, so that
+    on its own it says WHY backups are failing. When the cause is the backup
+    folder itself, that quoted text and _check_backup_dir's own finding are
+    the same paragraph in two wordings, and the banner printed both -- one
+    fault, read twice. Reported 2026-08-31 off a real failing install.
+
+    Only the quote is dropped, never the finding. "All three of the last
+    attempts failed" is information the folder check does not carry: it is
+    what says this is ongoing rather than a one-off, and it is what the
+    3-day modal escalates on.
+
+    Left untouched when backup_failing stands alone -- then the quoted error
+    is the only explanation the admin gets, and dropping it would trade a
+    repetition for a mystery. Same reasoning as _check_backup_dir's, which
+    reports backup_dir_missing or backup_dir_unwritable but never both.
+    """
+    codes = {f["code"] for f in findings}
+    if "backup_failing" not in codes:
+        return findings
+    if not codes & {"backup_dir_missing", "backup_dir_unwritable"}:
+        return findings
+    return [
+        dict(f, message="The last 3 backup attempts all failed.")
+        if f["code"] == "backup_failing" else f
+        for f in findings
+    ]
+
+
 def run_self_check(db):
     """Returns {"status", "ran_at", "findings"[, "disk_free_bytes"]}.
 
@@ -395,6 +424,8 @@ def run_self_check(db):
             )
         if result:
             findings.append(result)
+
+    findings = _drop_duplicated_cause(findings)
 
     status = "ok"
     for f in findings:
