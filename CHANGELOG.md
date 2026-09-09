@@ -3,6 +3,17 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.12.2] - 2026-09-10
+
+### Removed
+- **Leftover copies of a few screens that were never meant to be part of the
+  app.** They were saved into the app's folder by mistake during design work
+  in August, and anyone on the clinic's own network who knew the exact web
+  address could open them. They contained no patient, owner or financial
+  records — but one did show this computer's backup folder location and
+  network address. Installing this update removes them. Nothing about how the
+  app works changes.
+
 ## [1.12.1] - 2026-09-10
 
 ### Fixed
