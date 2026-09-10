@@ -198,7 +198,7 @@ async function barcodeManagerRefresh() {
   if (!barcodeManagerItemId) return;
   document.getElementById('barcodeModalError').style.display = 'none';
   try {
-    const res = await fetch(`/inventory-catalog/${encodeURIComponent(barcodeManagerItemId)}/barcode/status`);
+    const res = await fetch(`{{ url_for('inventory_catalog_barcode_status', item_id='__ID__') }}`.replace('__ID__', encodeURIComponent(barcodeManagerItemId)));
     const data = await res.json();
     if (!res.ok) {
       barcodeManagerShowError(data.error || 'Could not load this item\u2019s barcode.');
@@ -264,7 +264,7 @@ async function barcodeManagerSaveManual() {
     return;
   }
   try {
-    const res = await fetch(`/inventory-catalog/${encodeURIComponent(barcodeManagerItemId)}/barcode/manual`, {
+    const res = await fetch(`{{ url_for('inventory_catalog_barcode_manual', item_id='__ID__') }}`.replace('__ID__', encodeURIComponent(barcodeManagerItemId)), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-CSRFToken': barcodeManagerCsrf() },
       body: JSON.stringify({ barcode: value }),
@@ -285,7 +285,7 @@ async function barcodeManagerGenerate() {
   if (!barcodeManagerItemId) return;
   document.getElementById('barcodeModalError').style.display = 'none';
   try {
-    const res = await fetch(`/inventory-catalog/${encodeURIComponent(barcodeManagerItemId)}/barcode/generate`, {
+    const res = await fetch(`{{ url_for('inventory_catalog_barcode_generate', item_id='__ID__') }}`.replace('__ID__', encodeURIComponent(barcodeManagerItemId)), {
       method: 'POST',
       headers: { 'X-CSRFToken': barcodeManagerCsrf() },
       credentials: 'same-origin',
@@ -310,7 +310,7 @@ async function barcodeManagerRemove(kind) {
   if (!ok) return;
   document.getElementById('barcodeModalError').style.display = 'none';
   try {
-    const res = await fetch(`/inventory-catalog/${encodeURIComponent(barcodeManagerItemId)}/barcode/remove`, {
+    const res = await fetch(`{{ url_for('inventory_catalog_barcode_remove', item_id='__ID__') }}`.replace('__ID__', encodeURIComponent(barcodeManagerItemId)), {
       method: 'POST',
       headers: { 'X-CSRFToken': barcodeManagerCsrf() },
       credentials: 'same-origin',
@@ -339,7 +339,7 @@ async function loadBulkBarcodeList() {
   loading.style.display = 'block';
   printBtn.disabled = true;
   try {
-    const res = await fetch('/inventory-catalog/barcodes/generated');
+    const res = await fetch('{{ url_for('inventory_catalog_barcodes_generated') }}');
     const items = await res.json();
     loading.style.display = 'none';
     if (!res.ok) {

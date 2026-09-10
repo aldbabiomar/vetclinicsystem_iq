@@ -138,7 +138,7 @@ async function lookupRefundSale() {
   linesPanel.style.display = 'none';
   if (!saleId) { errEl.textContent = 'Enter a Sale ID.'; errEl.style.display = 'block'; return; }
   try {
-    const res = await fetch(`/api/sales/${encodeURIComponent(saleId)}/refundable-items`);
+    const res = await fetch(`{{ url_for('api_sale_refundable_items', sale_id=999999999) }}`.replace('999999999', encodeURIComponent(saleId)));
     const data = await res.json();
     if (!res.ok) {
       errEl.textContent = data.error || 'Could not find that sale.';
