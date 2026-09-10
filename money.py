@@ -2,7 +2,9 @@
 Central IQD money helpers. All "payable" figures (totals, balances,
 change, refunds, settlement payouts) must go through round_to_denomination()
 before being stored/displayed/charged. Do not round subtotals, unit
-prices, or cost snapshots this way — see IQD CURRENCY ROUNDING PLAN.md §1.
+prices, or cost snapshots this way -- rounding an input twice compounds the
+error, and a cost snapshot is a historical fact rather than a payable amount.
+See COMPARISON.md §1.1 for the money model as a whole.
 """
 import math
 

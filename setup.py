@@ -127,7 +127,7 @@ def apply_schema():
 # database set up before that release would silently never get it.
 #
 # Add one entry per change, in the same commit as the CHANGELOG entry
-# that introduces it (CLAUDE_CODE_RELEASE_WORKFLOW.md §6 step 2) — never
+# that introduces it (RELEASE_WORKFLOW.md §6 step 2) — never
 # edit or remove an entry once it's shipped in a release, since a live
 # database may already depend on it having run. Every statement must be
 # safe to run against a live database with real data: ADD COLUMN IF NOT
@@ -158,7 +158,7 @@ INCREMENTAL_SCHEMA_STATEMENTS = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_idempotency_key ON sales(idempotency_key) WHERE idempotency_key IS NOT NULL",
     # NOTE: if this database already has two or more owners sharing the
     # same non-null phone number (the exact duplicate-owner bug this
-    # index closes — see QA_RESULTS.md finding QA-1/QA-4), this statement
+    # index closes), this statement
     # fails outright and the whole incremental-migration run stops here.
     # Find and merge/clear the duplicates first (e.g. `SELECT phone,
     # COUNT(*) FROM owners WHERE phone IS NOT NULL GROUP BY phone HAVING
@@ -469,7 +469,7 @@ def ensure_desktop_shortcut(data_dir=None):
 # the in-app updater (Settings -> Updates, updater.py) needs. Not run by
 # default main() — an admin runs `python3 setup.py --enable-updates`
 # deliberately, since it moves .env/logs/attachments out of this folder.
-# See UPDATE_MECHANISM_PLAN.md §3 for the target layout.
+# See RELEASE_WORKFLOW.md §3 for the target layout.
 # ---------------------------------------------------------------------------
 _MACOS_LAUNCHER = """#!/bin/bash
 # VetClinicSystem IQ — supervisor launcher (macOS). Lives in vetclinicsystemiq-data/,
