@@ -7,7 +7,7 @@
     <h1>{{ case.animal_name }} <span class="muted" style="font-weight:400;font-size:16px;">— {{ case.owner_name }}</span></h1>
     <p class="page-sub">Admitted {{ case.admission_date }} · <span class="badge {{ 'ok' if case.dismissed else 'warn' }}">{{ 'Discharged' if case.dismissed else 'Admitted' }}</span></p>
   </div>
-  <a class="btn secondary" href="{{ url_for('inpatient_export_pdf', case_id=case.id) }}">Export Inpatient (PDF)</a>
+  <a class="btn secondary" href="{{ url_for('clinical.inpatient_export_pdf', case_id=case.id) }}">Export Inpatient (PDF)</a>
 </div>
 
 <div class="tabs" role="tablist">
@@ -20,7 +20,7 @@
 
 <div class="tab-pane" id="tab-info" role="tabpanel">
   <div class="card">
-    <form method="post" action="{{ url_for('inpatient_edit', case_id=case.id) }}">
+    <form method="post" action="{{ url_for('clinical.inpatient_edit', case_id=case.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="expected_updated_at" value="{{ case.updated_at or '' }}">
       <div class="form-grid">
@@ -50,7 +50,7 @@
 
 <div class="tab-pane" id="tab-updates" role="tabpanel" style="display:none;">
   <div class="card" style="margin-bottom:16px;">
-    <form method="post" action="{{ url_for('inpatient_update_add', case_id=case.id) }}">
+    <form method="post" action="{{ url_for('clinical.inpatient_update_add', case_id=case.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field full"><label for="inpatientdetail-8-note">Add a Daily Update — Condition of the Patient</label><textarea id="inpatientdetail-8-note" name="note" required></textarea></div>
       <div class="form-actions"><button class="btn small" type="submit">Log Update</button></div>
@@ -66,7 +66,7 @@
       </div>
       <button class="btn small secondary" type="button" aria-expanded="false" onclick="const c=this.closest('.card'); c.querySelector('.update-note-text').style.display='none'; c.querySelector('.update-edit-form').style.display='block'; this.style.display='none'; this.setAttribute('aria-expanded','true');">Edit</button>
     </div>
-    <form method="post" action="{{ url_for('inpatient_update_edit', case_id=case.id, update_id=u.id) }}" class="update-edit-form" style="display:none; margin-top:10px;">
+    <form method="post" action="{{ url_for('clinical.inpatient_update_edit', case_id=case.id, update_id=u.id) }}" class="update-edit-form" style="display:none; margin-top:10px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <textarea name="note" required>{{ u.note }}</textarea>
       <div class="form-actions"><button class="btn small" type="submit">Save</button></div>
@@ -90,7 +90,7 @@
           </div>
           <button class="btn small secondary" type="button" aria-expanded="false" onclick="const c=this.closest('.card'); c.querySelector('.update-note-text').style.display='none'; c.querySelector('.update-edit-form').style.display='block'; this.style.display='none'; this.setAttribute('aria-expanded','true');">Edit</button>
         </div>
-        <form method="post" action="{{ url_for('inpatient_update_edit', case_id=case.id, update_id=u.id) }}" class="update-edit-form" style="display:none; margin-top:10px;">
+        <form method="post" action="{{ url_for('clinical.inpatient_update_edit', case_id=case.id, update_id=u.id) }}" class="update-edit-form" style="display:none; margin-top:10px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <textarea name="note" required>{{ u.note }}</textarea>
           <div class="form-actions"><button class="btn small" type="submit">Save</button></div>
@@ -104,7 +104,7 @@
 
 <div class="tab-pane" id="tab-contact" role="tabpanel" style="display:none;">
   <div class="card" style="margin-bottom:16px;">
-    <form method="post" action="{{ url_for('inpatient_contact_add', case_id=case.id) }}">
+    <form method="post" action="{{ url_for('clinical.inpatient_contact_add', case_id=case.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="field"><label for="inpatientdetail-9-picked_up">Did the Owner Pick Up?</label>
@@ -128,7 +128,7 @@
 
 <div class="tab-pane" id="tab-billing" role="tabpanel" style="display:none;">
   <div class="card" style="margin-bottom:16px;">
-    <form method="post" action="{{ url_for('inpatient_billing_add', case_id=case.id) }}" id="inpatientBillingForm">
+    <form method="post" action="{{ url_for('clinical.inpatient_billing_add', case_id=case.id) }}" id="inpatientBillingForm">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field full" style="margin-bottom:10px;">
         <label for="inpatientBillSearch">Add Procedure to Bill</label>
@@ -149,14 +149,14 @@
       <div>{{ l.name }} × {{ l.quantity }}</div>
       <div style="display:flex; gap:10px; align-items:center;">
         {{ l.line_total|money }} IQD
-        <form method="post" action="{{ url_for('inpatient_billing_delete', case_id=case.id, line_id=l.id) }}">
+        <form method="post" action="{{ url_for('clinical.inpatient_billing_delete', case_id=case.id, line_id=l.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small danger" type="submit">×</button></form>
       </div>
     </div>
     {% else %}<div class="empty-note">No procedures billed yet.</div>{% endfor %}
 
     <div class="detail-item" style="margin-top:12px;"><div class="k">Subtotal</div><div class="v">{{ billing.subtotal|money }} IQD</div></div>
-    <form method="post" action="{{ url_for('inpatient_discount_save', case_id=case.id) }}" style="display:flex; gap:8px; align-items:flex-end; margin:8px 0;">
+    <form method="post" action="{{ url_for('clinical.inpatient_discount_save', case_id=case.id) }}" style="display:flex; gap:8px; align-items:flex-end; margin:8px 0;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field" style="flex:1;"><label for="inpatientdetail-11-discount_percent">Discount % (Max {{ discount_cap }}%)</label><input id="inpatientdetail-11-discount_percent" type="number" name="discount_percent" max="{{ discount_cap }}" min="0" value="{{ fv(form, 'discount_percent', billing.discount_percent) if discount_error else billing.discount_percent }}"></div>
       <button class="btn small secondary" type="submit">Apply</button>
@@ -165,7 +165,7 @@
     {% if billing.cleanup_amount %}<div class="detail-item"><div class="k">Clean Up applied</div><div class="v">{{ billing.cleanup_amount|money }} IQD</div></div>{% endif %}
     <span class="badge {{ 'ok' if billing.status=='Fully Paid' else ('danger' if billing.status=='Unpaid' else 'muted') }}">{{ billing.status }}</span>
 
-    <form method="post" action="{{ url_for('inpatient_payment_add', case_id=case.id) }}" style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line); display:flex; gap:8px; align-items:flex-end;">
+    <form method="post" action="{{ url_for('clinical.inpatient_payment_add', case_id=case.id) }}" style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line); display:flex; gap:8px; align-items:flex-end;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field" style="flex:1;"><label for="inpatientdetail-12-amount">Record Payment (IQD)</label><input id="inpatientdetail-12-amount" type="number" step="1" name="amount" required value="{{ fv(form, 'amount') if payment_error else '' }}"></div>
       <div class="field"><label for="inpatientdetail-13-cleanup_amount">Clean Up (max {{ CLEANUP_CAP }} IQD)</label><input id="inpatientdetail-13-cleanup_amount" type="number" step="1" min="0" name="cleanup_amount" value="{{ fv(form, 'cleanup_amount') if payment_error else '0' }}"></div>
@@ -187,17 +187,17 @@
   <div class="card">
     {% for file in files %}
     <div class="list-line">
-      <a href="{{ url_for('serve_attachment', relpath=file.relative_path) }}" target="_blank">{{ file.original_name }}</a>
+      <a href="{{ url_for('clinical.serve_attachment', relpath=file.relative_path) }}" target="_blank">{{ file.original_name }}</a>
       <span style="display:flex; align-items:center; gap:8px;">
         <span class="meta">{{ file.uploaded_at[:10] }}</span>
-        <form method="post" action="{{ url_for('attachment_delete', attachment_id=file.id) }}" style="display:inline;" data-confirm="Delete {{ file.original_name }}? This removes the file permanently, including the copy on disk.">
+        <form method="post" action="{{ url_for('clinical.attachment_delete', attachment_id=file.id) }}" style="display:inline;" data-confirm="Delete {{ file.original_name }}? This removes the file permanently, including the copy on disk.">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="btn small danger" type="submit" title="Delete {{ file.original_name }}" aria-label="Delete {{ file.original_name }}">×</button>
         </form>
       </span>
     </div>
     {% else %}<div class="empty-note">No files uploaded yet.</div>{% endfor %}
-    <form method="post" action="{{ url_for('inpatient_attachment_upload', case_id=case.id) }}" enctype="multipart/form-data" style="margin-top:10px; display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
+    <form method="post" action="{{ url_for('clinical.inpatient_attachment_upload', case_id=case.id) }}" enctype="multipart/form-data" style="margin-top:10px; display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="file" name="file" accept=".pdf,.jpg,.jpeg" required>
       <button class="btn small" type="submit">Upload</button>
