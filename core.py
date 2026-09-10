@@ -13,6 +13,7 @@ definitions, in a place both sides can reach.
 """
 import math
 import os
+import secrets
 import re
 import socket
 from datetime import datetime
@@ -392,3 +393,24 @@ def flash_cash_denomination_warning(amount):
         flash("Heads up: this amount isn't a multiple of 250 IQD. It'll still save as entered, "
               "but the Cash Register's end-of-day audit compares against physical notes, so an "
               "odd amount here can make an otherwise-correct day look slightly off.", "error")
+
+
+def csp_nonce():
+    """The per-request nonce that lets the Content-Security-Policy drop
+    'unsafe-inline' from script-src.
+
+    Generated on first use and cached on `g`, so the value the templates
+    render into `<script nonce="...">` and the value `add_security_headers()`
+    writes into the header are necessarily the same one — deriving them
+    separately is the classic way to ship a policy that blocks every script on
+    the page. Templates reach it through the `csp_nonce` context variable.
+
+    A nonce does NOT authorise inline event handlers, and a browser that sees a
+    nonce ignores 'unsafe-inline' entirely, so `on*=` attributes had to go
+    first; `static/behaviors.js` is what they became.
+    """
+    value = getattr(g, "_csp_nonce", None)
+    if value is None:
+        value = secrets.token_urlsafe(16)
+        g._csp_nonce = value
+    return value

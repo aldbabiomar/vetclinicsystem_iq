@@ -43,7 +43,7 @@
   <form method="post" action="{{ url_for('reports_opex_save') }}" id="opexForm">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-grid">
-      <div class="field"><label for="opexMonth">Month</label><input required type="month" name="month" id="opexMonth" value="{{ fv(form, 'month', today[:7]) }}" onchange="loadOpexForMonth()"></div>
+      <div class="field"><label for="opexMonth">Month</label><input required type="month" name="month" id="opexMonth" value="{{ fv(form, 'month', today[:7]) }}" data-vzh="reports-1"></div>
       <div class="field"><label for="opexRent">Rent (IQD)</label><input type="number" step="1" name="rent" id="opexRent" value="{{ fv(form, 'rent', '0') }}"></div>
       <div class="field"><label for="opexSalaries">Salaries / Payroll (IQD)</label><input type="number" step="1" name="salaries" id="opexSalaries" value="{{ fv(form, 'salaries', '0') }}"></div>
       <div class="field"><label for="opexUtilities">Utilities (IQD)</label><input type="number" step="1" name="utilities" id="opexUtilities" value="{{ fv(form, 'utilities', '0') }}"></div>
@@ -54,7 +54,7 @@
     <div class="form-actions"><button class="btn" type="submit">Save Operating Costs</button></div>
   </form>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 const OPEX_BY_MONTH = {{ opex_by_month|tojson }};
 function loadOpexForMonth() {
   const month = document.getElementById('opexMonth').value;
@@ -71,4 +71,7 @@ function loadOpexForMonth() {
 </script>
 <script src="{{ url_for('static', filename='progress.js') }}"></script>
 <script src="{{ url_for('static', filename='rebuild.js') }}"></script>
+<script nonce="{{ csp_nonce }}">
+VZ.bind('reports-1', 'change', function (event) { loadOpexForMonth(); });
+</script>
 {% endblock %}

@@ -11,11 +11,11 @@
 </div>
 
 <div class="tabs" role="tablist">
-  <a href="#info" class="tab-link active" data-tab="info" role="tab" aria-selected="true" aria-controls="tab-info" onclick="showTab('info');return false;">Info</a>
-  <a href="#updates" class="tab-link" data-tab="updates" role="tab" aria-selected="false" aria-controls="tab-updates" onclick="showTab('updates');return false;">Daily Updates</a>
-  <a href="#contact" class="tab-link" data-tab="contact" role="tab" aria-selected="false" aria-controls="tab-contact" onclick="showTab('contact');return false;">Contact Log</a>
-  <a href="#billing" class="tab-link" data-tab="billing" role="tab" aria-selected="false" aria-controls="tab-billing" onclick="showTab('billing');return false;">Billing</a>
-  <a href="#files" class="tab-link" data-tab="files" role="tab" aria-selected="false" aria-controls="tab-files" onclick="showTab('files');return false;">Attachments</a>
+  <a href="#info" class="tab-link active" data-tab="info" role="tab" aria-selected="true" aria-controls="tab-info" data-vzh="inpatient-detail-1">Info</a>
+  <a href="#updates" class="tab-link" data-tab="updates" role="tab" aria-selected="false" aria-controls="tab-updates" data-vzh="inpatient-detail-2">Daily Updates</a>
+  <a href="#contact" class="tab-link" data-tab="contact" role="tab" aria-selected="false" aria-controls="tab-contact" data-vzh="inpatient-detail-3">Contact Log</a>
+  <a href="#billing" class="tab-link" data-tab="billing" role="tab" aria-selected="false" aria-controls="tab-billing" data-vzh="inpatient-detail-4">Billing</a>
+  <a href="#files" class="tab-link" data-tab="files" role="tab" aria-selected="false" aria-controls="tab-files" data-vzh="inpatient-detail-5">Attachments</a>
 </div>
 
 <div class="tab-pane" id="tab-info" role="tabpanel">
@@ -38,7 +38,7 @@
           <select id="inpatientdetail-7-supervising_vet_id" name="supervising_vet_id"><option value="">—</option>{% for v in vets %}<option value="{{ v.id }}" {{ 'selected' if fv(form, 'supervising_vet_id', case.supervising_vet_id)==v.id }}>{{ v.full_name }}</option>{% endfor %}</select>
         </div>
         <div class="field checkbox-row" style="margin-top:22px;">
-          <input type="checkbox" name="dismissed" id="dismissedBox" {{ 'checked' if fv(form, 'dismissed', 'on' if case.dismissed else '')=='on' }} onchange="toggleDismissal()">
+          <input type="checkbox" name="dismissed" id="dismissedBox" {{ 'checked' if fv(form, 'dismissed', 'on' if case.dismissed else '')=='on' }} data-vzh="inpatient-detail-6">
           <label for="dismissedBox" style="text-transform:none; font-weight:500;">Dismissed</label>
         </div>
         <div class="field dismissal-only"><label for="dismissalDate">Dismissal Date</label><input type="date" name="dismissal_date" id="dismissalDate" value="{{ fv(form, 'dismissal_date', case.dismissal_date or '') }}"></div>
@@ -64,7 +64,7 @@
         <div class="small muted">{{ u.timestamp[:16] }} · {{ u.full_name or "—" }}</div>
         <div class="update-note-text">{{ u.note }}</div>
       </div>
-      <button class="btn small secondary" type="button" aria-expanded="false" onclick="const c=this.closest('.card'); c.querySelector('.update-note-text').style.display='none'; c.querySelector('.update-edit-form').style.display='block'; this.style.display='none'; this.setAttribute('aria-expanded','true');">Edit</button>
+      <button class="btn small secondary" type="button" aria-expanded="false" data-vzh="inpatient-detail-7">Edit</button>
     </div>
     <form method="post" action="{{ url_for('clinical.inpatient_update_edit', case_id=case.id, update_id=u.id) }}" class="update-edit-form" style="display:none; margin-top:10px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -76,7 +76,7 @@
   {% if updates|length > 3 %}
   <div style="margin-top:14px;">
     <button class="btn secondary" type="button" id="fullLogBtn"
-            onclick="document.getElementById('fullDailyLog').style.display='block'; this.style.display='none';">
+            data-vzh="inpatient-detail-8">
       View Full Daily Log History ({{ updates|length }} entries)
     </button>
     <div id="fullDailyLog" style="display:none; margin-top:14px;">
@@ -88,7 +88,7 @@
             <div class="small muted">{{ u.timestamp[:16] }} · {{ u.full_name or "—" }}</div>
             <div class="update-note-text">{{ u.note }}</div>
           </div>
-          <button class="btn small secondary" type="button" aria-expanded="false" onclick="const c=this.closest('.card'); c.querySelector('.update-note-text').style.display='none'; c.querySelector('.update-edit-form').style.display='block'; this.style.display='none'; this.setAttribute('aria-expanded','true');">Edit</button>
+          <button class="btn small secondary" type="button" aria-expanded="false" data-vzh="inpatient-detail-7">Edit</button>
         </div>
         <form method="post" action="{{ url_for('clinical.inpatient_update_edit', case_id=case.id, update_id=u.id) }}" class="update-edit-form" style="display:none; margin-top:10px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -138,7 +138,7 @@
         <div id="inpatientBillCart" style="margin-top:10px;"></div>
         <div id="inpatientBillFieldsHidden"></div>
       </div>
-      <div class="form-actions"><button class="btn small" type="submit" onclick="return prepareInpatientBillingSubmit()">Add to Bill</button></div>
+      <div class="form-actions"><button class="btn small" type="submit" data-vzh="inpatient-detail-9">Add to Bill</button></div>
     </form>
   </div>
 
@@ -205,7 +205,7 @@
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function showTab(name) {
   document.querySelectorAll('.tab-pane').forEach(p => p.style.display = 'none');
   document.getElementById('tab-' + name).style.display = 'block';
@@ -264,7 +264,7 @@ inpatientBillSearchInput.addEventListener('input', () => {
         if (!list.length) { inpatientBillResultsDiv.innerHTML = '<div class="empty-note">No matches.</div>'; return; }
         window.__inpatientBillResults = list;
         inpatientBillResultsDiv.innerHTML = list.map((i, idx) =>
-          `<div class="list-line" style="cursor:pointer;" data-idx="${idx}" onclick="addToInpatientBillCart(window.__inpatientBillResults[this.dataset.idx])">
+          `<div class="list-line" style="cursor:pointer;" data-idx="${idx}" data-vz-act="inpatient-detail-10">
              <div class="who">${escapeHtml(i.name)}</div><div class="meta">${i.category} · ${i.price != null ? i.price + ' IQD' : 'no price set'}</div>
            </div>`
         ).join('');
@@ -304,10 +304,10 @@ function renderInpatientBillCart() {
     <div class="pos-cart-line">
       <div>${escapeHtml(c.name)}<div class="meta small">${c.price} IQD each</div></div>
       <div style="display:flex; align-items:center; gap:6px;">
-        <button class="btn small secondary" type="button" onclick="changeInpatientBillQty('${c.id}',-1)">-</button>
-        <input type="number" min="1" value="${c.qty}" style="width:56px; text-align:center;" onchange="setInpatientBillQty('${c.id}', this.value)">
-        <button class="btn small secondary" type="button" onclick="changeInpatientBillQty('${c.id}',1)">+</button>
-        <button class="btn small danger" type="button" onclick="removeInpatientBillLine('${c.id}')">×</button>
+        <button class="btn small secondary" type="button" data-vz-act="inpatient-detail-11" data-line-id="${c.id}">-</button>
+        <input type="number" min="1" value="${c.qty}" style="width:56px; text-align:center;" data-vz-change="inpatient-detail-12" data-line-id="${c.id}">
+        <button class="btn small secondary" type="button" data-vz-act="inpatient-detail-13" data-line-id="${c.id}">+</button>
+        <button class="btn small danger" type="button" data-vz-act="inpatient-detail-14" data-line-id="${c.id}">×</button>
       </div>
     </div>`).join('');
 }
@@ -322,5 +322,21 @@ function prepareInpatientBillingSubmit() {
   });
   return true;
 }
+</script>
+<script nonce="{{ csp_nonce }}">
+VZ.bind('inpatient-detail-1', 'click', function (event) { showTab('info');return false; });
+VZ.bind('inpatient-detail-2', 'click', function (event) { showTab('updates');return false; });
+VZ.bind('inpatient-detail-3', 'click', function (event) { showTab('contact');return false; });
+VZ.bind('inpatient-detail-4', 'click', function (event) { showTab('billing');return false; });
+VZ.bind('inpatient-detail-5', 'click', function (event) { showTab('files');return false; });
+VZ.bind('inpatient-detail-6', 'change', function (event) { toggleDismissal(); });
+VZ.bind('inpatient-detail-7', 'click', function (event) { const c=this.closest('.card'); c.querySelector('.update-note-text').style.display='none'; c.querySelector('.update-edit-form').style.display='block'; this.style.display='none'; this.setAttribute('aria-expanded','true'); });
+VZ.bind('inpatient-detail-8', 'click', function (event) { document.getElementById('fullDailyLog').style.display='block'; this.style.display='none'; });
+VZ.bind('inpatient-detail-9', 'click', function (event) { return prepareInpatientBillingSubmit(); });
+VZ.action('inpatient-detail-10', function (event) { addToInpatientBillCart(window.__inpatientBillResults[this.dataset.idx]); });
+VZ.action('inpatient-detail-11', function (event) { changeInpatientBillQty(this.dataset.lineId,-1); });
+VZ.action('inpatient-detail-12', function (event) { setInpatientBillQty(this.dataset.lineId, this.value); });
+VZ.action('inpatient-detail-13', function (event) { changeInpatientBillQty(this.dataset.lineId,1); });
+VZ.action('inpatient-detail-14', function (event) { removeInpatientBillLine(this.dataset.lineId); });
 </script>
 {% endblock %}

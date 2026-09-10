@@ -139,7 +139,7 @@
   </div>
 </div>
 {% if show_payout_modal or show_audit_modal %}
-<script>
+<script nonce="{{ csp_nonce }}">
 window.VZSpring.present(document.getElementById('{{ "payoutModal" if show_payout_modal else "auditModal" }}'), true, {});
 </script>
 {% endif %}

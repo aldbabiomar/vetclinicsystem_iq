@@ -10,7 +10,7 @@
   {% if not readonly %}
   <div style="display:flex; gap:10px;">
     <button class="btn secondary" type="submit" form="auditForm" formaction="{{ url_for('inventory.audit_session_save', session_id=sess.id) }}">Save</button>
-    <button class="btn" type="button" onclick="confirmAudit()">Confirm</button>
+    <button class="btn" type="button" data-vzh="audit-session-view-1">Confirm</button>
   </div>
   {% endif %}
 </div>
@@ -69,12 +69,12 @@
     <p class="small">Continuing will confirm the audit and it can't be edited after. If you intend to save it for later, click Cancel and use Save instead.</p>
     <div id="confirmSummary" class="small" style="margin:10px 0; padding:10px; border-radius:8px; background:var(--muted-tint);"></div>
     <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
-      <button class="btn secondary" type="button" onclick="window.VZSpring.present(document.getElementById('confirmModal'), false, {});">Cancel</button>
-      <button class="btn" type="button" id="confirmAuditYesBtn" onclick="submitAuditConfirm()">Yes, Confirm Permanently</button>
+      <button class="btn secondary" type="button" data-vzh="audit-session-view-2">Cancel</button>
+      <button class="btn" type="button" id="confirmAuditYesBtn" data-vzh="audit-session-view-3">Yes, Confirm Permanently</button>
     </div>
   </div>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 // IMPORTANT: "Yes, Confirm Permanently" submits the SAME #auditForm that
 // "Save" uses (via formaction), not a separate form. A separate form here
 // would only carry its own csrf_token — none of the stock_/received_/etc.
@@ -113,4 +113,9 @@ function confirmAudit() {
 </script>
 {% endif %}
 <script src="{{ url_for('static', filename='unsaved-changes-form.js') }}"></script>
+<script nonce="{{ csp_nonce }}">
+VZ.bind('audit-session-view-1', 'click', function (event) { confirmAudit(); });
+VZ.bind('audit-session-view-2', 'click', function (event) { window.VZSpring.present(document.getElementById('confirmModal'), false, {}); });
+VZ.bind('audit-session-view-3', 'click', function (event) { submitAuditConfirm(); });
+</script>
 {% endblock %}

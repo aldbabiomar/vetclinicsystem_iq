@@ -47,6 +47,7 @@ import money
 # live in core.py so the route blueprints under routes/ can reach them
 # without importing this module, which registers them (see core.py).
 from core import BASE_DIR, VERSION, DB_REQUEST_TIMEOUT_SECONDS, get_db, lan_address
+from core import csp_nonce
 from core import (
     BadDate,
     BadNumber,
@@ -249,16 +250,24 @@ def add_security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "same-origin"
-    # 'unsafe-inline' for script/style, not a stricter nonce-based policy —
-    # every template here is inline-script-heavy, and this isn't the layer
-    # that stops an inline-script injection anyway (Jinja autoescaping
-    # already does that; verified clean repo-wide). What this actually
-    # buys: nothing on the page can load a script, stylesheet, image, or
-    # make a fetch/XHR/WebSocket connection to any origin but this app's
-    # own — closing off exfiltration and third-party-resource risk even
-    # if some future template change introduced one.
+    # script-src carries a per-request nonce rather than 'unsafe-inline'.
+    # This comment used to say a nonce policy was not worth the sitewide
+    # template rewrite; that rewrite was done on 2026-09-10 (review finding
+    # S6). Every on*= attribute became a listener in static/behaviors.js and
+    # every inline <script> carries nonce="{{ csp_nonce }}". A nonce
+    # authorises <script> blocks only, never inline handlers, and a browser
+    # that sees one ignores 'unsafe-inline' altogether — which is why the
+    # attributes had to go first rather than alongside.
+    #
+    # style-src still allows 'unsafe-inline' for the inline style= attributes
+    # that remain (review finding M8); tightening it is that finding's job.
+    #
+    # The rest is unchanged and is what this header actually buys: nothing on
+    # the page can load a script, stylesheet, image, or make a
+    # fetch/XHR/WebSocket connection to any origin but this app's own.
     resp.headers["Content-Security-Policy"] = (
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "default-src 'self'; "
+        f"script-src 'self' 'nonce-{csp_nonce()}'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
         "connect-src 'self'; frame-ancestors 'none'"
     )
@@ -510,6 +519,19 @@ def require_login():
     auth.refresh_session_permissions(db, user)
     if user["must_change_password"] and request.endpoint != "change_password":
         return redirect(url_for("change_password"))
+
+
+@app.context_processor
+def inject_csp_nonce():
+    """Deliberately separate from inject_globals().
+
+    That one talks to the database and carries a fallback path for when the
+    database is unreachable. A nonce dropped on that fallback path would block
+    every script on the 500 page — the page you least want to break, and the
+    one least likely to be looked at before release. This processor cannot
+    fail for that reason because it touches nothing but `g`.
+    """
+    return dict(csp_nonce=csp_nonce())
 
 
 @app.context_processor
