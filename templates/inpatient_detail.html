@@ -258,7 +258,7 @@ inpatientBillSearchInput.addEventListener('input', () => {
   const q = inpatientBillSearchInput.value.trim();
   if (!q) { inpatientBillResultsDiv.innerHTML = ''; return; }
   inpatientBillDebounce = setTimeout(() => {
-    fetch(`{{ url_for('api_price_list_lookup') }}?q=${encodeURIComponent(q)}&category=Service&category=Medicine`)
+    fetch(`{{ url_for('inventory.api_price_list_lookup') }}?q=${encodeURIComponent(q)}&category=Service&category=Medicine`)
       .then(r => r.json())
       .then(list => {
         if (!list.length) { inpatientBillResultsDiv.innerHTML = '<div class="empty-note">No matches.</div>'; return; }

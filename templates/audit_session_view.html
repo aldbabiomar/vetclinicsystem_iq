@@ -9,7 +9,7 @@
   </div>
   {% if not readonly %}
   <div style="display:flex; gap:10px;">
-    <button class="btn secondary" type="submit" form="auditForm" formaction="{{ url_for('audit_session_save', session_id=sess.id) }}">Save</button>
+    <button class="btn secondary" type="submit" form="auditForm" formaction="{{ url_for('inventory.audit_session_save', session_id=sess.id) }}">Save</button>
     <button class="btn" type="button" onclick="confirmAudit()">Confirm</button>
   </div>
   {% endif %}
@@ -84,13 +84,13 @@
 // first silently locked the audit with none of the typed-in counts saved.)
 function submitAuditConfirm() {
   const form = document.getElementById('auditForm');
-  form.setAttribute('action', "{{ url_for('audit_session_confirm', session_id=sess.id) }}");
+  form.setAttribute('action', "{{ url_for('inventory.audit_session_confirm', session_id=sess.id) }}");
   window.VZSpring.present(document.getElementById('confirmModal'), false, {});
   if (form.requestSubmit) form.requestSubmit();
   else form.submit();
 }
 function confirmAudit() {
-  document.getElementById('auditForm').setAttribute('action', "{{ url_for('audit_session_save', session_id=sess.id) }}");
+  document.getElementById('auditForm').setAttribute('action', "{{ url_for('inventory.audit_session_save', session_id=sess.id) }}");
   const totalItems = {{ items|length }};
   let counted = 0, negative = 0, suspiciousZero = 0;
   document.querySelectorAll('input[name^="stock_"]').forEach(function(input) {
