@@ -6411,16 +6411,23 @@ def refund_service_save():
         return redisplay()
     visit_id = (f.get("visit_id") or "").strip() or None
     case_id_raw = (f.get("inpatient_case_id") or "").strip()
+    boarding_id_raw = (f.get("boarding_id") or "").strip()
 
     if amount <= 0:
         flash("Refund amount must be greater than 0.", "error")
         return redisplay()
-    # A service refund always reverses one specific visit or one specific
-    # inpatient case — never both at once, and never neither. A goodwill/
-    # no-specific-record refund is handled through Cash Register instead,
-    # not this table. See ORPHANED_RECORDS_AUDIT.md F-05.
-    if bool(visit_id) == bool(case_id_raw):
-        flash("A service refund must be linked to exactly one visit OR one inpatient case.", "error")
+    # A service refund always reverses one specific visit, one specific
+    # inpatient case, or one specific boarding stay — never more than one at
+    # once, and never none. A goodwill/no-specific-record refund is handled
+    # through Cash Register instead, not this table. See
+    # ORPHANED_RECORDS_AUDIT.md F-05.
+    #
+    # Boarding was missing here until 2026-09-10: payments has anchored on all
+    # three since it existed, so a boarding stay could be paid for and there
+    # was no way to hand the money back through this page.
+    if [bool(visit_id), bool(case_id_raw), bool(boarding_id_raw)].count(True) != 1:
+        flash("A service refund must be linked to exactly one visit, inpatient case, "
+              "or boarding stay.", "error")
         return redisplay()
 
     # Locked before computing what's refundable, same reasoning as every
@@ -6442,6 +6449,15 @@ def refund_service_save():
             return redisplay()
         case_id = int(case_id_raw)
 
+    boarding_id = None
+    if boarding_id_raw:
+        if not boarding_id_raw.isdigit() or not db.execute(
+            "SELECT 1 FROM boarding_sessions WHERE id=? FOR UPDATE", (int(boarding_id_raw),)
+        ).fetchone():
+            flash(f"Boarding stay {boarding_id_raw} not found.", "error")
+            return redisplay()
+        boarding_id = int(boarding_id_raw)
+
     refundable = 0
     if visit_id:
         paid = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE visit_id=?", (visit_id,)).fetchone()["s"]
@@ -6453,6 +6469,12 @@ def refund_service_save():
         paid = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE inpatient_case_id=?", (case_id,)).fetchone()["s"]
         already_refunded = db.execute(
             "SELECT COALESCE(SUM(amount),0) s FROM refunds WHERE inpatient_case_id=? AND refund_type='service'", (case_id,)
+        ).fetchone()["s"]
+        refundable += (paid or 0) - (already_refunded or 0)
+    if boarding_id:
+        paid = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE boarding_id=?", (boarding_id,)).fetchone()["s"]
+        already_refunded = db.execute(
+            "SELECT COALESCE(SUM(amount),0) s FROM refunds WHERE boarding_id=? AND refund_type='service'", (boarding_id,)
         ).fetchone()["s"]
         refundable += (paid or 0) - (already_refunded or 0)
     if amount > refundable + 1e-9:
@@ -6473,10 +6495,14 @@ def refund_service_save():
     if case_id:
         c = db.execute("SELECT cleanup_amount FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
         cleanup_amount_at_refund += (c["cleanup_amount"] if c else 0) or 0
+    if boarding_id:
+        bs = db.execute("SELECT cleanup_amount FROM boarding_sessions WHERE id=?", (boarding_id,)).fetchone()
+        cleanup_amount_at_refund += (bs["cleanup_amount"] if bs else 0) or 0
     cur = db.execute(
-        "INSERT INTO refunds (refund_type, refund_date, amount, visit_id, inpatient_case_id, reason, refund_method, "
-        "processed_by, created_at, cleanup_amount_at_refund) VALUES ('service',?,?,?,?,?,?,?,?,?) RETURNING id",
-        (refund_date, rounded_amount, visit_id, case_id, reason, refund_method, session["user_id"], now,
+        "INSERT INTO refunds (refund_type, refund_date, amount, visit_id, inpatient_case_id, boarding_id, reason, "
+        "refund_method, processed_by, created_at, cleanup_amount_at_refund) "
+        "VALUES ('service',?,?,?,?,?,?,?,?,?,?) RETURNING id",
+        (refund_date, rounded_amount, visit_id, case_id, boarding_id, reason, refund_method, session["user_id"], now,
          cleanup_amount_at_refund),
     )
     refund_id = cur.fetchone()["id"]
