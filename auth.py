@@ -363,39 +363,70 @@ LOCKOUT_LOOKBACK_HOURS = 24
 def login_lock_status(db, username):
     """Returns (locked: bool, minutes_remaining: int|None, unlock_at: datetime|None).
 
-    Escalating, not sliding: every fresh block of LOCKOUT_THRESHOLD failed
-    attempts since the last successful login (bounded to the last
-    LOCKOUT_LOOKBACK_HOURS, so a stale failure from days ago doesn't count
-    forever) is one lockout "episode." Episode N locks for
-    min(15 * 2**(N-1), 240) minutes — 15/30/60/120, capped at 240 (4h)
-    from the 4th episode on — instead of the old fixed 15 minutes that
-    slid forward on every single new failure. That old behavior meant one
-    bad-password request every few minutes kept any known username locked
-    indefinitely; this still locks on the first 5 wrong attempts exactly
-    as before, but re-locking requires a genuinely fresh batch of 5 more
-    failed attempts each time, not just one, and each fresh batch costs
-    the attacker more wait time than the last. A real successful login
-    (or the lookback window itself) resets the count to zero.
+    Escalating, and it escalates on volume rather than on pausing.
+
+    Failures since the last successful login (bounded to LOCKOUT_LOOKBACK_HOURS,
+    so a stale failure from days ago does not count forever) are grouped into
+    bursts: a new burst starts whenever the gap since the previous failure
+    exceeds LOCKOUT_BASE_MINUTES. Every COMPLETED block of LOCKOUT_THRESHOLD
+    failures is one escalation step -- counted both across bursts and within a
+    single burst. Step N locks for min(15 * 2**(N-1), 240) minutes:
+    15 / 30 / 60 / 120, capped at 4 hours from the fourth on.
+
+    Two properties, and this app has had one implementation of each:
+
+      * Bursts, so a handful of stray wrong guesses that never reached the
+        threshold are not treated as a lockout episode, and cannot drag the
+        anchor backwards and SHORTEN a real lock.
+      * Blocks within a burst, so an attacker who simply never pauses still
+        escalates. Counting only whole bursts meant a continuous attack stayed
+        at the flat base penalty forever: fifteen straight wrong guesses bought
+        thirteen minutes, where fifteen guesses in three spaced-out batches
+        bought an hour. Pausing was rewarded.
+
+    Anchored on the failure that crossed the CURRENT threshold, not on the most
+    recent failure -- continuing to guess after a lock is already armed cannot
+    push its expiry further out within the same block. A real successful login,
+    or the lookback window passing, resets the count to zero.
     """
     if not username:
         return False, None, None
-    last_success = db.execute(
-        "SELECT MAX(timestamp) AS t FROM login_log WHERE username=? AND success=1", (username,)
-    ).fetchone()["t"]
     lookback_cutoff = (datetime.now() - timedelta(hours=LOCKOUT_LOOKBACK_HOURS)).isoformat(timespec="seconds")
-    since = max(last_success, lookback_cutoff) if last_success else lookback_cutoff
-    failures = db.execute(
+    last_success = db.execute(
+        "SELECT MAX(timestamp) AS t FROM login_log WHERE username=? AND success=1 AND timestamp >= ?",
+        (username, lookback_cutoff),
+    ).fetchone()["t"]
+    since = last_success or lookback_cutoff
+    rows = db.execute(
         "SELECT timestamp FROM login_log WHERE username=? AND success=0 AND timestamp > ? ORDER BY timestamp",
         (username, since),
     ).fetchall()
-    n = len(failures)
-    if n < LOCKOUT_THRESHOLD:
+    if not rows:
         return False, None, None
-    episode = n // LOCKOUT_THRESHOLD
-    last_failure_in_episode = failures[episode * LOCKOUT_THRESHOLD - 1]["timestamp"]
-    duration_minutes = min(LOCKOUT_BASE_MINUTES * (2 ** (episode - 1)), LOCKOUT_MAX_MINUTES)
-    last_at = datetime.fromisoformat(last_failure_in_episode)
-    unlock_at = last_at + timedelta(minutes=duration_minutes)
+    timestamps = [datetime.fromisoformat(r["timestamp"]) for r in rows]
+
+    bursts = [[timestamps[0]]]
+    for t in timestamps[1:]:
+        if (t - bursts[-1][-1]) > timedelta(minutes=LOCKOUT_BASE_MINUTES):
+            bursts.append([t])
+        else:
+            bursts[-1].append(t)
+
+    # One step per completed block of LOCKOUT_THRESHOLD, summed over bursts.
+    steps = sum(len(b) // LOCKOUT_THRESHOLD for b in bursts)
+    if steps == 0:
+        return False, None, None
+
+    # The most recent failure that completed a block, scanning forward so the
+    # latest qualifying burst wins.
+    trigger_at = None
+    for b in bursts:
+        blocks = len(b) // LOCKOUT_THRESHOLD
+        if blocks:
+            trigger_at = b[blocks * LOCKOUT_THRESHOLD - 1]
+
+    duration_minutes = min(LOCKOUT_BASE_MINUTES * (2 ** (steps - 1)), LOCKOUT_MAX_MINUTES)
+    unlock_at = trigger_at + timedelta(minutes=duration_minutes)
     remaining = unlock_at - datetime.now()
     if remaining.total_seconds() <= 0:
         return False, None, None
