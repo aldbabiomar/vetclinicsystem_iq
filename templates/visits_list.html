@@ -28,7 +28,7 @@
     <col style="width:11%"><col style="width:9%"><col style="width:12%"><col style="width:12%">
     <col style="width:11%"><col style="width:11%"><col style="width:13%"><col style="width:12%"><col style="width:9%">
   </colgroup>
-  <thead class="sticky-header"><tr><th>Date</th><th>ID</th><th>Animal</th><th>Owner</th><th>Type</th><th>Doctor</th><th>Status</th><th>Payment</th><th class="num-col">Bill (IQD)</th></tr></thead>
+  <thead class="sticky-header"><tr><th scope="col">Date</th><th scope="col">ID</th><th scope="col">Animal</th><th scope="col">Owner</th><th scope="col">Type</th><th scope="col">Doctor</th><th scope="col">Status</th><th scope="col">Payment</th><th scope="col" class="num-col">Bill (IQD)</th></tr></thead>
   <tbody>
     {% for v in visits %}
     <tr data-row-href="{{ url_for('visit_detail', visit_id=v.id) }}" tabindex="0" role="link" aria-label="Open {{ v.animal_name }}'s visit">
