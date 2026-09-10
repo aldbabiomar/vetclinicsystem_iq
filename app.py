@@ -898,7 +898,7 @@ def inject_globals():
         ctx = dict(clinic_name=clinic_name, clinic_location=clinic_location, theme_palette=theme_palette,
                    today=date.today().isoformat(),
                    current_role=session.get("role"), current_username=session.get("username"),
-                   is_system_admin=auth.is_system_admin(), session_user_id=session.get("user_id"))
+                   session_user_id=session.get("user_id"))
         if session.get("user_id"):
             snap = cached_dashboard_snapshot(db)
             ctx["alert_count"] = (
@@ -919,7 +919,7 @@ def inject_globals():
             clinic_name="VetClinicSystem IQ", clinic_location="", theme_palette="vetzone",
             today=date.today().isoformat(),
             current_role=session.get("role"), current_username=session.get("username"),
-            alert_count=0, is_system_admin=False, session_user_id=session.get("user_id"),
+            alert_count=0, session_user_id=session.get("user_id"),
         )
 
 
@@ -1770,8 +1770,52 @@ def api_sale_refundable_items(sale_id):
     })
 
 
+def _browse_roots(db):
+    """The only directories the Settings folder/file pickers may browse.
+
+    This endpoint used to resolve whatever ?path= it was given with
+    os.path.abspath() and list it, with no confinement at all -- so any
+    logged-in user who could reach it could enumerate /, /etc, /Users and
+    /var/log on the clinic machine. It still has to browse the *server's*
+    disk (pg_dump/pg_restore run there, see the docstring on
+    api_browse_folder), so the fix is a root, not removal.
+    """
+    roots = []
+    for candidate in (os.path.expanduser("~"),
+                      logic.get_setting(db, "backup_dir"),
+                      _data_dir):
+        if candidate and os.path.isdir(candidate):
+            real = os.path.realpath(candidate)
+            if real not in roots:
+                roots.append(real)
+    return roots
+
+
+def _within_roots(path, roots):
+    """True if `path` is one of `roots` or lives beneath one.
+
+    commonpath(), never startswith(): '/Users/omar-evil' must not pass a
+    '/Users/omar' check. realpath() first so a symlink cannot step outside
+    a root either.
+    """
+    real = os.path.realpath(path)
+    for root in roots:
+        try:
+            if os.path.commonpath([real, root]) == root:
+                return True
+        except ValueError:
+            # Different drives on Windows -- not comparable, so not inside.
+            continue
+    return False
+
+
+def _outside_roots_error(roots):
+    where = ", ".join(roots) if roots else "the backup folder"
+    return jsonify({"error": f"That folder is outside the areas this app can browse ({where})."}), 400
+
+
 @app.route("/api/browse-folder")
-@auth.permission_required("manage_settings")
+@auth.permission_required("manage_maintenance")
 def api_browse_folder():
     """
     Lists subfolders (and, when ?ext= is given, matching files too) of a
@@ -1795,6 +1839,10 @@ def api_browse_folder():
     if not os.path.isdir(path):
         return jsonify({"error": f"\u201c{path}\u201d isn\u2019t a folder VetClinicSystem IQ can see on this computer."}), 400
 
+    roots = _browse_roots(db)
+    if not _within_roots(path, roots):
+        return _outside_roots_error(roots)
+
     try:
         entries = os.listdir(path)
     except OSError as e:
@@ -1813,16 +1861,18 @@ def api_browse_folder():
     files.sort(key=str.lower)
 
     parent = os.path.dirname(path)
+    if parent == path or not _within_roots(parent, roots):
+        parent = None
     return jsonify({
         "current": path,
-        "parent": parent if parent != path else None,
+        "parent": parent,
         "folders": folders,
         "files": files,
     })
 
 
 @app.route("/api/browse-folder/new-folder", methods=["POST"])
-@auth.permission_required("manage_settings")
+@auth.permission_required("manage_maintenance")
 def api_browse_folder_new():
     data = request.get_json(silent=True) or {}
     parent = os.path.abspath((data.get("path") or "").strip())
@@ -1831,6 +1881,9 @@ def api_browse_folder_new():
         return jsonify({"error": "Enter a plain folder name (no slashes)."}), 400
     if not os.path.isdir(parent):
         return jsonify({"error": "That parent folder no longer exists."}), 400
+    roots = _browse_roots(get_db())
+    if not _within_roots(parent, roots):
+        return _outside_roots_error(roots)
     new_path = os.path.join(parent, name)
     try:
         os.makedirs(new_path, exist_ok=True)
@@ -6739,7 +6792,7 @@ def settings_page():
 
 
 @app.route("/settings/backup-now", methods=["POST"])
-@auth.permission_required("manage_settings")
+@auth.permission_required("manage_maintenance")
 def settings_backup_now():
     import backup as backup_mod
 
@@ -6771,7 +6824,7 @@ def settings_backup_now():
 
 
 @app.route("/settings/restore-now", methods=["POST"])
-@auth.permission_required("manage_settings")
+@auth.permission_required("manage_maintenance")
 def settings_restore_now():
     source_file = (request.form.get("source_file") or "").strip()
     import backup as backup_mod
@@ -6836,7 +6889,7 @@ def settings_restore_now():
 
 
 @app.route("/settings/job-status")
-@auth.permission_required("manage_settings")
+@auth.permission_required("manage_maintenance")
 def settings_job_status():
     """Polled by the progress bars on Backup Now / Restore Now."""
     job_id = request.args.get("job_id", "")
@@ -6867,7 +6920,7 @@ def settings_job_status():
 
 
 @app.route("/settings/autostart", methods=["POST"])
-@auth.permission_required("manage_settings")
+@auth.permission_required("manage_maintenance")
 def settings_autostart():
     import autostart
     enable = request.form.get("autostart_enabled") == "on"
@@ -6877,7 +6930,7 @@ def settings_autostart():
 
 
 @app.route("/settings/updates/status")
-@auth.permission_required("manage_settings")
+@auth.permission_required("manage_maintenance")
 def settings_updates_status():
     """Everything the Settings page needs to DRAW the updates card, and
     nothing that needs the network.
@@ -6904,7 +6957,7 @@ def settings_updates_status():
 
 
 @app.route("/settings/updates/check")
-@auth.permission_required("manage_settings")
+@auth.permission_required("manage_maintenance")
 def settings_updates_check():
     import updater
     if not updater.is_configured():
@@ -6924,7 +6977,7 @@ def settings_updates_check():
 
 
 @app.route("/settings/updates/apply", methods=["POST"])
-@auth.permission_required("manage_settings")
+@auth.permission_required("manage_maintenance")
 def settings_updates_apply():
     import updater
     if not updater.is_configured():
@@ -6950,7 +7003,7 @@ def settings_updates_apply():
 
 
 @app.route("/settings/updates/rollback", methods=["POST"])
-@auth.permission_required("manage_settings")
+@auth.permission_required("manage_maintenance")
 def settings_updates_rollback():
     import updater
     if not updater.is_configured():
