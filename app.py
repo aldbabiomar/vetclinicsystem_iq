@@ -99,9 +99,16 @@ app.config["SESSION_COOKIE_SECURE"] = BEHIND_TLS_PROXY
 # doesn't happen on a front-desk machine where the browser is routinely
 # left open for an entire shift or longer. session.permanent is set at
 # successful login (see login() below) so this actually takes effect.
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(
-    hours=float(os.environ.get("SESSION_LIFETIME_HOURS", "12"))
-)
+SESSION_LIFETIME_HOURS = float(os.environ.get("SESSION_LIFETIME_HOURS", "12"))
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=SESSION_LIFETIME_HOURS)
+# Flask-WTF defaults WTF_CSRF_TIME_LIMIT to 3600 seconds, and this app never
+# set it -- so the CSRF token expired after ONE hour inside a session that
+# stayed valid for TWELVE. A visit form, an inpatient bill or a POS cart left
+# open across a consultation then failed on submit, threw away everything
+# typed, and sent the person to the login page for what was a stale form
+# token, not an expired session. Tied to the same value so the two cannot
+# drift apart again; raising SESSION_LIFETIME_HOURS now raises both.
+app.config["WTF_CSRF_TIME_LIMIT"] = int(SESSION_LIFETIME_HOURS * 3600)
 
 # Optional network allowlist: comma-separated CIDR blocks (e.g.
 # "192.168.1.0/24,10.0.0.5/32"). Unset by default — no behavior change
@@ -846,11 +853,27 @@ def favicon_ico():
     return send_from_directory(app.static_folder, static_asset("favicon-v2.ico", palette))
 
 
+def _warn_if_submission_will_be_lost():
+    """Say so when a signed-out request was carrying data.
+
+    require_login() redirects to /login with ?next=<path>, and login() then
+    redirects to that path with a GET -- so the body of a POST is gone. The
+    person sees an empty form and no indication that anything was lost, which
+    on a front desk means a whole visit or bill quietly typed twice. This does
+    not preserve the submission (see FULL_APP_REVIEW U2 for the stash option);
+    it makes the loss visible, which is the part that actually hurt.
+    """
+    if request.method != "GET":
+        flash("You were signed out before that could be saved, so nothing was stored. "
+              "Please sign in and enter it again.", "error")
+
+
 @app.before_request
 def require_login():
     if request.endpoint in OPEN_ENDPOINTS or request.endpoint is None:
         return
     if not session.get("user_id"):
+        _warn_if_submission_will_be_lost()
         return redirect(url_for("login", next=request.path))
     db = get_db()
     user = auth.current_user(db)
@@ -1014,7 +1037,19 @@ def handle_http_exception(e):
     if request.method != "GET":
         mark_transaction_failed()
     if isinstance(e, CSRFError):
-        flash("Your session expired while this page was open. Please log in again — "
+        # A CSRF failure is not the same thing as an expired session, and
+        # saying it was sent people to a login screen they did not need --
+        # after discarding what they had typed. Now that the token lifetime
+        # matches the session lifetime this should be rare, but the two can
+        # still come apart (a server restart rotates SECRET_KEY on some
+        # deployments, invalidating every outstanding token while the browser
+        # still holds a valid-looking cookie). Tell the truth about which one
+        # happened, and only force a re-login when the session really is gone.
+        if session.get("user_id"):
+            flash("This page had been open too long to submit safely, so nothing was saved. "
+                  "Please check what you entered and submit it again.", "error")
+            return _fallback_redirect()
+        flash("You were signed out while this page was open. Please sign in again — "
               "you may need to re-enter what you were working on.", "error")
         return redirect(url_for("login"))
     if e.code == 400:
@@ -2481,7 +2516,7 @@ def _visit_detail_context(db, visit_id):
     summary = logic.visit_billing_summary(db, visit_id)
     payments = db.execute("SELECT * FROM payments WHERE visit_id=? ORDER BY date DESC", (visit_id,)).fetchall()
     files = attach_mod.list_attachments(db, "visit", visit_id)
-    cap = auth.discount_cap_for(db)
+    cap = auth.discount_cap_for()
     return dict(visit=visit, billing=billing_row, summary=summary, payments=payments, files=files, discount_cap=cap)
 
 
@@ -2789,7 +2824,7 @@ def visit_discount_save(visit_id):
     except BadNumber:
         flash("Discount must be a valid number.", "error")
         return redisplay()
-    cap = auth.discount_cap_for(db)
+    cap = auth.discount_cap_for()
     error = discount_percent_error(percent, cap)
     if error:
         flash(error, "error")
@@ -4825,7 +4860,7 @@ def _boarding_page_context(db, show_all, page):
         r["incident_count"] = incidents_by_id.get(r["id"], 0)
     return dict(sessions=rows, show_all=show_all, today=date.today().isoformat(),
                 page=page, total_pages=page_count(total), total_count=total,
-                discount_cap=auth.discount_cap_for(db))
+                discount_cap=auth.discount_cap_for())
 
 
 @app.route("/boarding")
@@ -5070,7 +5105,7 @@ def boarding_payment(boarding_id):
     except BadNumber:
         flash("Discount must be a valid number.", "error")
         return redisplay()
-    error = discount_percent_error(discount_percent, auth.discount_cap_for(db))
+    error = discount_percent_error(discount_percent, auth.discount_cap_for())
     if error:
         flash(error, "error")
         return redisplay()
@@ -5143,7 +5178,7 @@ def boarding_export_pdf(boarding_id):
 @auth.permission_required("process_pos_sales")
 def pos_page():
     db = get_db()
-    cap = auth.discount_cap_for(db)
+    cap = auth.discount_cap_for()
     # Fresh one-time token per page load — see pos_checkout()'s dedup
     # check and idx_sales_idempotency_key in schema_postgres.sql.
     return render_template("pos.html", discount_cap=cap, idempotency_key=uuid.uuid4().hex)
@@ -5163,7 +5198,7 @@ def pos_checkout():
         # plain redirect already loses the cart today. What IS worth
         # keeping is the non-cart state that's cheap to redisplay via
         # fv(): discount %, payment method, and cash received.
-        cap = auth.discount_cap_for(db)
+        cap = auth.discount_cap_for()
         return render_template("pos.html", discount_cap=cap, idempotency_key=uuid.uuid4().hex, form=f)
 
     # Friendly fast-path for a double-click on "Complete Sale" — the same
@@ -5186,7 +5221,7 @@ def pos_checkout():
     except BadNumber:
         flash("Discount must be a valid number.", "error")
         return redisplay()
-    cap = auth.discount_cap_for(db)
+    cap = auth.discount_cap_for()
     error = discount_percent_error(discount_percent, cap)
     if error:
         flash(error, "error")
@@ -5496,7 +5531,7 @@ def _inpatient_detail_context(db, case_id):
     billing = logic.inpatient_billing_summary(db, case_id)
     payments = db.execute("SELECT * FROM payments WHERE inpatient_case_id=? ORDER BY date DESC", (case_id,)).fetchall()
     files = attach_mod.list_attachments(db, "inpatient", case_id)
-    cap = auth.discount_cap_for(db)
+    cap = auth.discount_cap_for()
     return dict(case=case, updates=updates, recent_updates=updates[:3],
                 contacts=contacts, recent_contacts=contacts[:3], billing=billing, payments=payments,
                 vets=vet_users(db), files=files, discount_cap=cap)
@@ -5717,7 +5752,7 @@ def inpatient_discount_save(case_id):
     except BadNumber:
         flash("Discount must be a valid number.", "error")
         return redisplay()
-    cap = auth.discount_cap_for(db)
+    cap = auth.discount_cap_for()
     error = discount_percent_error(percent, cap)
     if error:
         flash(error, "error")
