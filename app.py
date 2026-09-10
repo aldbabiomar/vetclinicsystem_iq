@@ -1637,8 +1637,28 @@ def health():
     try:
         get_db().execute("SELECT 1")
         return {"status": "ok", "version": VERSION}, 200
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}, 503
+    except Exception:
+        # This endpoint is in OPEN_ENDPOINTS -- no login required -- so
+        # whatever it returns is readable by anyone who can reach the app.
+        # It used to return str(e), and psycopg's connection errors carry the
+        # database host, port and user inline:
+        #   connection to server at "127.0.0.1", port 5432 failed:
+        #   FATAL: password authentication failed for user "vetclinic"
+        # That path is reachable whenever the pool has no live connection --
+        # the app starting before Postgres is the obvious way. The reference
+        # id ties this response to the full traceback in logs/errors.log,
+        # which is already access-controlled.
+        #
+        # updater.py's _probe_health() only reads `status`, and the Settings
+        # page's restart poll only checks that the request succeeds, so
+        # nothing consumes the old free-text detail.
+        error_id = uuid.uuid4().hex[:8].upper()
+        error_logger.error(f"[{error_id}] /health check failed\n" + traceback.format_exc())
+        return {
+            "status": "error",
+            "detail": f"The application could not reach its database. "
+                      f"Reference {error_id} — see logs/errors.log on the server.",
+        }, 503
 
 
 # ---------------------------------------------------------------------------
