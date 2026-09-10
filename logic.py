@@ -1915,8 +1915,10 @@ def vet_users(db):
     role has roles.is_vet_role=true, not a hardcoded role name. This is the
     one place this lookup is written; app.py's vet_users() and this
     module's day_grid() both call it so the query can't quietly drift out
-    of sync with the users/roles schema again the way it did before (see
-    BUGFIXES.md, "Appointments page crashes").
+    of sync with the users/roles schema again the way it did before: the
+    Appointments page used to select vets by a hardcoded role NAME, so
+    renaming the "Vet" role emptied every vet picker in the app and the page
+    crashed on the empty column set.
     """
     return db.execute(
         "SELECT u.id, u.full_name FROM users u "
@@ -2100,8 +2102,10 @@ def distributor_payables_summary(db):
 # they already flow through pos_checkout / audit sessions / P&L exactly
 # like owned stock with zero special-casing there. This section is the
 # distributor-facing receiving/shrinkage/returns/settlement layer on top
-# of that shared data. See Consignment_Feature_Framework.md for the full
-# spec these functions implement.
+# of that shared data. The consignment_* functions below, together with
+# app.py's "/consignment" routes and the four consignment_* tables in
+# schema_postgres.sql, ARE the specification -- the design document this
+# comment used to point at no longer exists.
 
 def record_consignment_receipt(db, item_id, distributor_id, quantity, unit_cost_at_receipt,
                                 received_date, delivery_reference, notes, received_by):
@@ -2582,3 +2586,68 @@ def cash_register_last_30_days(db):
             "difference": audit["difference"] if audit else None,
         })
     return out
+
+
+# ---------------------------------------------------------------------------
+# Log retention
+# ---------------------------------------------------------------------------
+# audit_log, login_log, backup_log and restore_log were never pruned. audit_log
+# grows fastest -- log_change() writes one row per CHANGED FIELD on every
+# update, plus one per create and delete -- and all four sit inside every
+# pg_dump, so they inflate backup duration, backup size and restore time
+# indefinitely. That interacts with two things already known: the shutdown
+# backup that "may not finish" on a large database (COMPARISON.md §18) and the
+# restore drill's runtime.
+#
+# self_check_log already had its own prune; these four are the ones that did
+# not.
+RETENTION_TABLES = [
+    ("audit_log", "timestamp"),
+    ("login_log", "timestamp"),
+    ("backup_log", "started_at"),
+    ("restore_log", "started_at"),
+]
+
+# Floor of 90 days is far above auth.LOCKOUT_LOOKBACK_HOURS, which reads
+# login_log to decide whether an account is locked out -- pruning inside that
+# window would silently disarm the lockout. test_log_retention.py asserts the
+# relationship rather than trusting this comment.
+LOG_RETENTION_MIN_DAYS = 90
+LOG_RETENTION_MAX_DAYS = 3650
+LOG_RETENTION_DEFAULT_DAYS = 730
+PRUNE_BATCH = 5000
+
+
+def prune_old_logs(db, now=None):
+    """Delete log rows older than the configured window. Returns
+    {table: rows_deleted}.
+
+    Batched rather than one DELETE per table: a first run against years of
+    history would otherwise hold a single long transaction over the tables the
+    app writes to on every request. Each batch commits on its own, so an
+    interrupted prune leaves a consistent database and simply resumes next time.
+    """
+    try:
+        days = int(get_setting(db, "log_retention_days", LOG_RETENTION_DEFAULT_DAYS)
+                   or LOG_RETENTION_DEFAULT_DAYS)
+    except (TypeError, ValueError):
+        days = LOG_RETENTION_DEFAULT_DAYS
+    days = max(LOG_RETENTION_MIN_DAYS, min(days, LOG_RETENTION_MAX_DAYS))
+    cutoff = ((now or datetime.now()) - timedelta(days=days)).isoformat(timespec="seconds")
+
+    deleted = {}
+    for table, column in RETENTION_TABLES:
+        total = 0
+        while True:
+            cur = db.execute(
+                f"DELETE FROM {table} WHERE ctid IN ("
+                f"  SELECT ctid FROM {table} WHERE {column} < ? LIMIT {PRUNE_BATCH})",
+                (cutoff,),
+            )
+            n = cur.rowcount or 0
+            db.commit()
+            total += n
+            if n < PRUNE_BATCH:
+                break
+        deleted[table] = total
+    return deleted
