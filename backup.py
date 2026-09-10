@@ -214,7 +214,7 @@ def resolve_restorable_backup(db, source_file):
         return False, None, "Choose a valid backup file to restore from."
 
     # Matched against the exact string as submitted (not the realpath'd
-    # form above) — that's what run_backup()/​_log() actually wrote into
+    # form above) — that's what run_backup()/_log() actually wrote into
     # backup_log.filepath, since dest_dir there is the backup_dir setting
     # as configured, not a canonicalized path.
     row = db.execute(
