@@ -714,10 +714,9 @@ def followups_page(db, only_pending=False, limit=20, offset=0):
     then-slice approach for what this page actually shows.
     """
     where = "v.followup_needed = 'Y'"
-    params = []
     if only_pending:
         where += " AND v.followup_status = 'Pending'"
-    total = db.execute(f"SELECT COUNT(*) c FROM visits v WHERE {where}", params).fetchone()["c"]
+    total = db.execute(f"SELECT COUNT(*) c FROM visits v WHERE {where}").fetchone()["c"]
     q = f"""
     SELECT v.id as visit_id, v.followup_method, v.followup_reason, v.followup_date,
            v.followup_status, v.doctor, v.created_by, v.date as visit_date,
@@ -727,7 +726,7 @@ def followups_page(db, only_pending=False, limit=20, offset=0):
     ORDER BY COALESCE(v.followup_date, '0001-01-01') DESC, v.id DESC
     LIMIT ? OFFSET ?
     """
-    rows = [dict(r) for r in db.execute(q, params + [limit, offset]).fetchall()]
+    rows = [dict(r) for r in db.execute(q, [limit, offset]).fetchall()]
     today = date.today()
     rows = [_annotate_followup(r, today) for r in rows]
     return rows, total
