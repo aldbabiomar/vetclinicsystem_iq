@@ -21,6 +21,7 @@ from flask import flash, g, render_template, request, url_for
 
 import db as dbmod
 import jobs
+import money
 import logic
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -350,3 +351,44 @@ def required_field(f, key, label):
 # the same method the original sale/payment used. Feeds the Cash
 # Register's per-bucket totals (see cash_register_page below).
 PAYMENT_METHODS = ["Cash", "Card", "Transfer"]
+
+
+def discount_percent_error(percent, cap):
+    """Range-checks an already-parsed discount percent against the current
+    user's role cap. Shared by visit/inpatient/POS discount-save routes so
+    the actual bound comparison lives in exactly one place — those three
+    routes are otherwise structurally similar but genuinely differ in
+    which table they update and how they look up "not discountable" line
+    items, so only this one piece (the part a future validation-rule
+    change would need to touch) is factored out. Returns an error string,
+    or None if percent is valid."""
+    if percent > cap or percent < 0:
+        return f"Discount must be between 0% and {cap}% for your role."
+    return None
+
+
+def cleanup_amount_error(new_amount, existing_amount, balance):
+    """Range-checks a Clean Up submission — see CLEANUP_FEATURE_PLAN.md §4.2.
+    Shared by the four payment routes (Visit/Inpatient/Boarding payment,
+    POS checkout), same convention as discount_percent_error() above.
+    Returns an error string, or None if new_amount is valid."""
+    if new_amount < 0:
+        return "Clean Up amount can't be negative."
+    if existing_amount + new_amount > money.CLEANUP_CAP:
+        return f"Clean Up can't exceed {money.CLEANUP_CAP} IQD total on this bill."
+    if new_amount > balance:
+        return "Clean Up can't exceed the remaining balance."
+    return None
+
+
+def flash_cash_denomination_warning(amount):
+    """Gentle, non-blocking heads-up (same spirit as the Price List one)
+    when a manually-typed payment/refund amount isn't a 250 IQD
+    multiple. Doesn't affect what's saved — this is only here because
+    the Cash Register audit compares a day's collected total against
+    physically-counted notes, so an odd amount can make an otherwise-
+    correct day look slightly off."""
+    if not money.is_denomination_valid(amount):
+        flash("Heads up: this amount isn't a multiple of 250 IQD. It'll still save as entered, "
+              "but the Cash Register's end-of-day audit compares against physical notes, so an "
+              "odd amount here can make an otherwise-correct day look slightly off.", "error")

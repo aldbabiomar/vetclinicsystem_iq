@@ -14,7 +14,7 @@ money model, which must not be merged (COMPARISON.md §1.1).
 import pytest
 
 import money
-from app import cleanup_amount_error
+from core import cleanup_amount_error
 
 CAP = money.CLEANUP_CAP
 
@@ -87,7 +87,9 @@ def test_the_helper_is_used_by_every_payment_surface():
     import pathlib
     import re
 
-    src = (pathlib.Path(__file__).parent.parent / "app.py").read_text(encoding="utf-8")
+    root = pathlib.Path(__file__).parent.parent
+    sources = [root / "app.py", root / "core.py"] + sorted((root / "routes").glob("*.py"))
+    src = "\n".join(p.read_text(encoding="utf-8") for p in sources)
     assert src.count("cleanup_amount_error(") >= 5, (
         "expected the helper plus at least four call sites")
     body = src.split("def cleanup_amount_error(", 1)[1].split("\ndef ", 1)[0]
