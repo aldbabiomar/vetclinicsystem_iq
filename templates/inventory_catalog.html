@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Inventory Catalog — {{ clinic_name }}{% endblock %}
+{% block title %}{{ _('Inventory Catalog') }} — {{ clinic_name }}{% endblock %}
 {% block main_class %}main-wide{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><h1>{{ _('Inventory Catalog') }}</h1><p class="page-sub">{% if search %}{{ total_count }} result(s) for "{{ search }}".{% else %}{{ total_count }} items shown.{% endif %} Audit history tracks actual counts.</p></div>
+  <div><h1>{{ _('Inventory Catalog') }}</h1><p class="page-sub">{% if search %}{{ _('%(total_count)s result(s) for "%(search)s".', total_count=total_count, search=search) }}{% else %}{{ _('%(total_count)s items shown.', total_count=total_count) }}{% endif %} {{ _('Audit history tracks actual counts.') }}</p></div>
   <div class="u-row">
     {% if has_generated_barcodes %}
     <button class="btn secondary" type="button" data-open-modal="#bulkBarcodeModal" data-vzh="inventory-catalog-1">{{ _('Bulk Barcode Print') }}</button>
@@ -37,7 +37,7 @@
     {% set new_form = form if show_new_form else None %}
     <div class="form-grid">
       <div class="field"><label for="inventorycatalog-1-name">{{ _('Item Name') }}</label><input id="inventorycatalog-1-name" required name="name" value="{{ fv(new_form, 'name') }}"></div>
-      <div class="field"><label for="inventorycatalog-2-category">{{ _('Category') }}</label><select id="inventorycatalog-2-category" name="category">{% for c in categories %}<option {{ 'selected' if fv(new_form, 'category')==c }}>{{ c }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="inventorycatalog-2-category">{{ _('Category') }}</label><select id="inventorycatalog-2-category" name="category">{% for c in categories %}<option value="{{ c }}" {{ 'selected' if fv(new_form, 'category')==c }}> {{ c|tr }} </option>{% endfor %}</select></div>
       <div class="field"><label for="inventorycatalog-3-unit">{{ _('Unit') }}</label><input id="inventorycatalog-3-unit" name="unit" placeholder="{{ _('Bottle, Box, Piece…') }}" value="{{ fv(new_form, 'unit') }}"></div>
       <div class="field"><label for="inventorycatalog-4-cost_price">{{ _('Cost Price (%(currency_label)s)', currency_label=currency_label()) }}</label><input id="inventorycatalog-4-cost_price" type="number" step="1" name="cost_price" value="{{ fv(new_form, 'cost_price') }}"></div>
       <div class="field"><label for="inventorycatalog-5-distributor_id">{{ _('Preferred Distributor') }}</label>
@@ -66,7 +66,7 @@
   <col>
   <col>
 </colgroup>
-  <thead class="sticky-header"><tr><th scope="col">{{ _('ID') }}</th><th scope="col">{{ _('Name') }}</th><th scope="col">{{ _('Category') }}</th><th scope="col">{{ _('Unit') }}</th><th scope="col">{{ _('Barcode') }}</th><th scope="col">{{ _('Track Expiry') }}</th><th scope="col" class="num-col">Cost ({{ currency_label() }})</th><th scope="col">{{ _('Distributor') }}</th><th scope="col"></th></tr></thead>
+  <thead class="sticky-header"><tr><th scope="col">{{ _('ID') }}</th><th scope="col">{{ _('Name') }}</th><th scope="col">{{ _('Category') }}</th><th scope="col">{{ _('Unit') }}</th><th scope="col">{{ _('Barcode') }}</th><th scope="col">{{ _('Track Expiry') }}</th><th scope="col" class="num-col">{{ _('Cost (%(currency_label)s)', currency_label=currency_label()) }}</th><th scope="col">{{ _('Distributor') }}</th><th scope="col"></th></tr></thead>
   <tbody>
     {% for i in items %}
     {% set row_form = form if (edit_error_id and edit_error_id == i.id) else None %}
@@ -75,7 +75,7 @@
     <tr data-edit-form="edit-{{ i.id }}" class="{{ 'row-flag-mismatch' if i.id in flagged_inventory }}" {% if i.id in flagged_inventory %}title="{{ _('Retail data inconsistency: no active Retail Price List item is linked to this inventory item.') }}"{% endif %}>
       <td class="muted u-nowrap">{{ i.id }}</td>
       <td><input class="cell-input" form="edit-{{ i.id }}" name="name" value="{{ fv(row_form, 'name', i.name) }}"></td>
-      <td><select class="cell-input-plain" form="edit-{{ i.id }}" name="category">{% for c in categories %}<option {{ 'selected' if fv(row_form, 'category', i.category)==c }}>{{ c }}</option>{% endfor %}</select></td>
+      <td><select class="cell-input-plain" form="edit-{{ i.id }}" name="category">{% for c in categories %}<option value="{{ c }}" {{ 'selected' if fv(row_form, 'category', i.category)==c }}> {{ c|tr }} </option>{% endfor %}</select></td>
       <td><input class="cell-input short" form="edit-{{ i.id }}" name="unit" value="{{ fv(row_form, 'unit', i.unit or '') }}"></td>
       <td class="small muted">
         <button class="btn small secondary" type="button" data-item-id="{{ i.id }}" data-item-name="{{ i.name }}"
@@ -93,7 +93,7 @@
       <td class="u-nowrap">
         <form class="u-inline" method="post" action="{{ url_for('inventory.inventory_catalog_toggle', item_id=i.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button class="btn small {{ 'danger' if i.active else 'secondary' }}" type="submit">{{ 'Deactivate' if i.active else 'Reactivate' }}</button>
+          <button class="btn small {{ 'danger' if i.active else 'secondary' }}" type="submit">{{ _('Deactivate') if i.active else _('Reactivate') }}</button>
         </form>
       </td>
     </tr>
@@ -173,7 +173,7 @@ function barcodeManagerCsrf() {
 
 function openBarcodeManager(itemId, itemName) {
   barcodeManagerItemId = itemId;
-  document.getElementById('barcodeModalTitle').textContent = 'Manage Barcode — ' + itemName;
+  document.getElementById('barcodeModalTitle').textContent = {{ _('Manage Barcode — {name}')|tojson }}.replace('{name}', itemName);
   document.getElementById('barcodeManualInput').value = '';
   window.VZSpring.present(document.getElementById('barcodeManagerModal'), true, {});
   barcodeManagerRefresh();
@@ -197,12 +197,12 @@ async function barcodeManagerRefresh() {
     const res = await fetch(`{{ url_for('inventory.inventory_catalog_barcode_status', item_id='__ID__') }}`.replace('__ID__', encodeURIComponent(barcodeManagerItemId)));
     const data = await res.json();
     if (!res.ok) {
-      barcodeManagerShowError(data.error || 'Could not load this item\u2019s barcode.');
+      barcodeManagerShowError(data.error || {{ _('Could not load this item’s barcode.')|tojson }});
       return;
     }
     barcodeManagerRender(data);
   } catch (e) {
-    barcodeManagerShowError('Could not reach the server.');
+    barcodeManagerShowError({{ _('Could not reach the server.')|tojson }});
   }
 }
 
@@ -224,7 +224,7 @@ function barcodeManagerRender(data) {
   const isGenerated = data.source === 'generated';
 
   // ---- Manually Enter/Entered Barcode section ----
-  manualTitle.textContent = isManual ? 'Manually Entered Barcode' : 'Manually Enter Barcode';
+  manualTitle.textContent = isManual ? {{ _('Manually Entered Barcode')|tojson }} : {{ _('Manually Enter Barcode')|tojson }};
   manualInput.value = isManual ? (data.barcode || '') : (isGenerated ? '' : manualInput.value);
   manualInput.disabled = isGenerated;
   manualSaveBtn.disabled = isGenerated;
@@ -233,16 +233,16 @@ function barcodeManagerRender(data) {
 
   // ---- Create/Created Barcode section ----
   if (isGenerated) {
-    generatedTitle.textContent = 'Created Barcode';
-    generatedHint.textContent = 'This item\u2019s barcode was created by VetClinicSystem IQ. Print a label to stick on the item, or remove it to start over.';
+    generatedTitle.textContent = {{ _('Created Barcode')|tojson }};
+    generatedHint.textContent = {{ _('This item’s barcode was created by VetClinicSystem IQ. Print a label to stick on the item, or remove it to start over.')|tojson }};
     createBtn.style.display = 'none';
     printBtn.style.display = 'inline-flex';
     printBtn.href = data.label_url;
     generatedRemoveBtn.style.display = 'inline-flex';
     generatedSection.style.opacity = '1';
   } else {
-    generatedTitle.textContent = 'Create Barcode';
-    generatedHint.textContent = 'No barcode on the packaging? VetClinicSystem IQ can create one and print a label to stick on the item.';
+    generatedTitle.textContent = {{ _('Create Barcode')|tojson }};
+    generatedHint.textContent = {{ _('No barcode on the packaging? VetClinicSystem IQ can create one and print a label to stick on the item.')|tojson }};
     createBtn.style.display = 'inline-flex';
     createBtn.disabled = isManual;
     printBtn.style.display = 'none';
@@ -256,7 +256,7 @@ async function barcodeManagerSaveManual() {
   const value = document.getElementById('barcodeManualInput').value.trim();
   document.getElementById('barcodeModalError').style.display = 'none';
   if (!value) {
-    barcodeManagerShowError('Enter a barcode first.');
+    barcodeManagerShowError({{ _('Enter a barcode first.')|tojson }});
     return;
   }
   try {
@@ -268,12 +268,12 @@ async function barcodeManagerSaveManual() {
     });
     const data = await res.json();
     if (!res.ok) {
-      barcodeManagerShowError(data.error || 'Could not save that barcode.');
+      barcodeManagerShowError(data.error || {{ _('Could not save that barcode.')|tojson }});
       return;
     }
     barcodeManagerRefresh();
   } catch (e) {
-    barcodeManagerShowError('Could not reach the server.');
+    barcodeManagerShowError({{ _('Could not reach the server.')|tojson }});
   }
 }
 
@@ -288,20 +288,20 @@ async function barcodeManagerGenerate() {
     });
     const data = await res.json();
     if (!res.ok) {
-      barcodeManagerShowError(data.error || 'Could not create a barcode.');
+      barcodeManagerShowError(data.error || {{ _('Could not create a barcode.')|tojson }});
       return;
     }
     barcodeManagerRefresh();
   } catch (e) {
-    barcodeManagerShowError('Could not reach the server.');
+    barcodeManagerShowError({{ _('Could not reach the server.')|tojson }});
   }
 }
 
 async function barcodeManagerRemove(kind) {
   if (!barcodeManagerItemId) return;
   const ok = await window.VZDialog.confirm(
-    'Remove this barcode? You can add a new one afterward, but this one will stop scanning immediately.',
-    { okLabel: 'Remove Barcode', cancelLabel: 'Keep It' }
+    {{ _('Remove this barcode? You can add a new one afterward, but this one will stop scanning immediately.')|tojson }},
+    { okLabel: {{ _('Remove Barcode')|tojson }}, cancelLabel: {{ _('Keep It')|tojson }} }
   );
   if (!ok) return;
   document.getElementById('barcodeModalError').style.display = 'none';
@@ -313,13 +313,13 @@ async function barcodeManagerRemove(kind) {
     });
     const data = await res.json();
     if (!res.ok) {
-      barcodeManagerShowError(data.error || 'Could not remove that barcode.');
+      barcodeManagerShowError(data.error || {{ _('Could not remove that barcode.')|tojson }});
       return;
     }
     closeBarcodeManager();
     location.reload();
   } catch (e) {
-    barcodeManagerShowError('Could not reach the server.');
+    barcodeManagerShowError({{ _('Could not reach the server.')|tojson }});
   }
 }
 
@@ -339,7 +339,7 @@ async function loadBulkBarcodeList() {
     const items = await res.json();
     loading.style.display = 'none';
     if (!res.ok) {
-      error.textContent = 'Could not load barcodes.';
+      error.textContent = {{ _('Could not load barcodes.')|tojson }};
       error.style.display = 'block';
       return;
     }
@@ -392,7 +392,7 @@ async function loadBulkBarcodeList() {
     printBtn.disabled = false;
   } catch (e) {
     loading.style.display = 'none';
-    error.textContent = 'Could not reach the server.';
+    error.textContent = {{ _('Could not reach the server.')|tojson }};
     error.style.display = 'block';
   }
 }

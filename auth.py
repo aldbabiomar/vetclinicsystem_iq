@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import session, redirect, url_for, request, abort
+from flask_babel import gettext as _
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # ---------------------------------------------------------------------------
@@ -434,7 +435,14 @@ def login_lock_status(db, username):
 
 
 def describe_device(user_agent):
-    """Very small, dependency-free user-agent summary: 'Windows · Chrome' etc."""
+    """Very small, dependency-free user-agent summary: 'Windows · Chrome' etc.
+
+    The two fallbacks are translated here rather than in the template, because
+    the template only ever sees the joined string — `|tr` on "Unknown OS ·
+    Unknown browser" matches no msgid, and splitting it in Jinja would mean
+    parsing a display string back apart. Browser and OS names are proper nouns
+    and are deliberately left alone.
+    """
     ua = (user_agent or "").lower()
     if "windows" in ua:
         os_name = "Windows"
@@ -449,7 +457,7 @@ def describe_device(user_agent):
     elif "linux" in ua:
         os_name = "Linux"
     else:
-        os_name = "Unknown OS"
+        os_name = _("Unknown OS")
 
     if "edg/" in ua:
         browser = "Edge"
@@ -464,7 +472,7 @@ def describe_device(user_agent):
     elif "safari/" in ua and "chrome/" not in ua:
         browser = "Safari"
     else:
-        browser = "Unknown browser"
+        browser = _("Unknown browser")
     return f"{os_name} \u00b7 {browser}"
 
 

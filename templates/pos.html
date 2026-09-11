@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Point of Sale — {{ clinic_name }}{% endblock %}
+{% block title %}{{ _('Point of Sale') }} — {{ clinic_name }}{% endblock %}
 {% block content %}
 <div class="page-head"><div><h1>{{ _('Point of Sale') }}</h1><p class="page-sub">{{ _('Scan or search a Retail item to add it to the sale.') }}</p></div></div>
 
@@ -29,7 +29,7 @@
       <div class="field" style="margin:10px 0;">
         <label for="paymentMethod">{{ _('Payment Method') }}</label>
         <select id="paymentMethod" data-vzh="pos-2">
-          {% for pm in ['Cash', 'Card', 'Transfer'] %}<option {{ 'selected' if fv(form, 'payment_method', 'Cash')==pm }}>{{ pm }}</option>{% endfor %}
+          {% for pm in ['Cash', 'Card', 'Transfer'] %}<option value="{{ pm }}" {{ 'selected' if fv(form, 'payment_method', 'Cash')==pm }}> {{ pm|tr }} </option>{% endfor %}
         </select>
       </div>
       <div id="cashFields">
@@ -57,7 +57,7 @@
 <script nonce="{{ csp_nonce }}">
 let cart = []; // {id, name, price, qty, stock} — starts empty every time this
 // page loads. POS used to mirror this to sessionStorage and show a
-// "Sale in progress" indicator elsewhere in the app pointing back to it;
+// {{ _('Sale in progress')|tojson }} indicator elsewhere in the app pointing back to it;
 // that whole mechanism has been removed (see BUGFIXES.md) — a sale that's
 // not checked out is simply gone if you leave this page, same as any
 // ordinary form.
@@ -78,25 +78,25 @@ searchInput.addEventListener('input', () => {
         fetch(`{{ url_for('inventory.api_inventory_lookup') }}?q=${encodeURIComponent(q)}`)
           .then(r => r.json())
           .then(list => {
-            if (!list.length) { resultsDiv.innerHTML = '<div class="empty-note">No matches.</div>'; return; }
+            if (!list.length) { resultsDiv.innerHTML = '<div class="empty-note">' + {{ _('No matches.')|tojson }} + '</div>'; return; }
             window.__posSearchResults = list;
             resultsDiv.innerHTML = list.map((i, idx) =>
               `<div class="list-line" style="cursor:pointer;" data-idx="${idx}" data-vz-act="pos-4">
-                 <div class="who">${escapeHtml(i.name)}</div><div class="meta">${i.price != null ? i.price + ' {{ currency_label() }}' : 'no price set'} · stock: ${i.stock ?? '—'}</div>
+                 <div class="who">${escapeHtml(i.name)}</div><div class="meta">${i.price != null ? i.price + ' {{ currency_label() }}' : {{ _('no price set')|tojson }}} · stock: ${i.stock ?? '—'}</div>
                </div>`
             ).join('');
           })
-          .catch(() => { resultsDiv.innerHTML = '<div class="empty-note">Could not search inventory; check server connection.</div>'; });
+          .catch(() => { resultsDiv.innerHTML = '<div class="empty-note">' + {{ _('Could not search inventory; check server connection.')|tojson }} + '</div>'; });
       })
-      .catch(() => { resultsDiv.innerHTML = '<div class="empty-note">Could not search inventory; check server connection.</div>'; });
+      .catch(() => { resultsDiv.innerHTML = '<div class="empty-note">' + {{ _('Could not search inventory; check server connection.')|tojson }} + '</div>'; });
   }, 200);
 });
 
 function addToCart(item) {
-  if (item.price == null) { window.VZToast.show(item.name + ' has no sale price set in the Price List.', 'error'); return; }
+  if (item.price == null) { window.VZToast.show({{ _('{name} has no sale price set in the Price List.')|tojson }}.replace('{name}', item.name), 'error'); return; }
   const existing = cart.find(c => c.id === item.id);
   if (existing) {
-    if (item.stock != null && existing.qty + 1 > item.stock) { window.VZToast.show(`Only ${item.stock} in stock.`, 'warn'); return; }
+    if (item.stock != null && existing.qty + 1 > item.stock) { window.VZToast.show({{ _('Only {stock} in stock.')|tojson }}.replace('{stock}', item.stock), 'warn'); return; }
     existing.qty += 1;
   } else {
     cart.push({id: item.id, name: item.name, price: item.price, qty: 1, stock: item.stock});
@@ -106,7 +106,7 @@ function addToCart(item) {
 function changeQty(id, delta) {
   const line = cart.find(c => c.id === id);
   const next = line.qty + delta;
-  if (delta > 0 && line.stock != null && next > line.stock) { window.VZToast.show(`Only ${line.stock} in stock.`, 'warn'); return; }
+  if (delta > 0 && line.stock != null && next > line.stock) { window.VZToast.show({{ _('Only {stock} in stock.')|tojson }}.replace('{stock}', line.stock), 'warn'); return; }
   line.qty = Math.max(1, next);
   renderCart();
 }
@@ -114,7 +114,7 @@ function setQty(id, value) {
   const line = cart.find(c => c.id === id);
   let qty = parseInt(value, 10);
   if (!Number.isFinite(qty) || qty < 1) qty = 1;
-  if (line.stock != null && qty > line.stock) { window.VZToast.show(`Only ${line.stock} in stock.`, 'warn'); qty = line.stock; }
+  if (line.stock != null && qty > line.stock) { window.VZToast.show({{ _('Only {stock} in stock.')|tojson }}.replace('{stock}', line.stock), 'warn'); qty = line.stock; }
   line.qty = qty;
   renderCart();
 }
@@ -124,7 +124,7 @@ function removeLine(id) {
 }
 function renderCart() {
   const linesDiv = document.getElementById('cartLines');
-  if (!cart.length) { linesDiv.innerHTML = '<div class="empty-note">Cart is empty.</div>'; }
+  if (!cart.length) { linesDiv.innerHTML = '<div class="empty-note">' + {{ _('Cart is empty.')|tojson }} + '</div>'; }
   else {
     linesDiv.innerHTML = cart.map(c => `
       <div class="pos-cart-line">
@@ -174,16 +174,16 @@ function renderChange(total) {
   const roundedChange = Math.floor(exactChange / 250) * 250;
   changeDueEl.textContent = Math.max(roundedChange, 0).toLocaleString() + ' {{ currency_label() }}';
   if (exactChange < 0) {
-    noteEl.textContent = `Cash received is ${(-exactChange).toLocaleString()} {{ currency_label() }} short of the total.`;
+    noteEl.textContent = {{ _('Cash received is {amount} %(currency_label)s short of the total.', currency_label=currency_label())|tojson }}.replace('{amount}', (-exactChange).toLocaleString());
   } else if (roundedChange !== exactChange) {
-    noteEl.textContent = `(exact: ${exactChange.toLocaleString()} {{ currency_label() }} — ${(exactChange - roundedChange).toLocaleString()} {{ currency_label() }} rounding, absorbed by clinic)`;
+    noteEl.textContent = {{ _('(exact: {exact} %(currency_label)s — {rounding} %(currency_label)s rounding, absorbed by clinic)', currency_label=currency_label())|tojson }}.replace('{exact}', exactChange.toLocaleString()).replace('{rounding}', (exactChange - roundedChange).toLocaleString());
   } else {
     noteEl.textContent = '';
   }
 }
 renderCart();
 function prepareSubmit() {
-  if (!cart.length) { window.VZToast.show('Cart is empty.', 'error'); return false; }
+  if (!cart.length) { window.VZToast.show({{ _('Cart is empty.')|tojson }}, 'error'); return false; }
   document.getElementById('discountHidden').value = document.getElementById('discountInput').value;
   document.getElementById('cleanupHidden').value = document.getElementById('cleanupInput').value;
   document.getElementById('paymentHidden').value = document.getElementById('paymentMethod').value;

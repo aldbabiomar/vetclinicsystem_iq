@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}{{ case.animal_name }} — Inpatient — {{ clinic_name }}{% endblock %}
+{% block title %}{{ case.animal_name }} — {{ _('Inpatient') }} — {{ clinic_name }}{% endblock %}
 {% block content %}
 {% include "_back_link.html" %}
 <div class="page-head">
   <div>
     <h1>{{ case.animal_name }} <span class="muted" style="font-weight:400;font-size:16px;">— {{ case.owner_name }}</span></h1>
-    <p class="page-sub">Admitted {{ case.admission_date|localdate }} · <span class="badge {{ 'ok' if case.dismissed else 'warn' }}">{{ 'Discharged' if case.dismissed else 'Admitted' }}</span></p>
+    <p class="page-sub">{{ _('Admitted %(admission_date)s', admission_date=case.admission_date|localdate) }} · <span class="badge {{ 'ok' if case.dismissed else 'warn' }}">{{ _('Discharged') if case.dismissed else _('Admitted') }}</span></p>
   </div>
   <a class="btn secondary" href="{{ url_for('clinical.inpatient_export_pdf', case_id=case.id) }}">{{ _('Export Inpatient (PDF)') }}</a>
 </div>
@@ -117,11 +117,11 @@
   </div>
   <div class="section-title">{{ _('Last 3 Days') }}</div>
   {% for c in recent_contacts %}
-  <div class="list-line"><div><span class="badge {{ 'ok' if c.picked_up else 'danger' }}">{{ 'Picked Up' if c.picked_up else 'No Answer' }}</span> <span class="meta">{{ c.timestamp[:16] }} · {{ c.full_name or "—" }}</span></div><div class="meta">{{ c.notes or '' }}</div></div>
+  <div class="list-line"><div><span class="badge {{ 'ok' if c.picked_up else 'danger' }}">{{ _('Picked Up') if c.picked_up else _('No Answer') }}</span> <span class="meta">{{ c.timestamp[:16] }} · {{ c.full_name or "—" }}</span></div><div class="meta">{{ c.notes or '' }}</div></div>
   {% else %}<div class="empty-note">{{ _('No contact attempts logged yet.') }}</div>{% endfor %}
   {% if contacts|length > 3 %}
   <details style="margin-top:10px;"><summary class="small muted" style="cursor:pointer;">{{ _('View all %(contacts)s contact attempts', contacts=contacts|length) }}</summary>
-    {% for c in contacts %}<div class="list-line"><div><span class="badge {{ 'ok' if c.picked_up else 'danger' }}">{{ 'Picked Up' if c.picked_up else 'No Answer' }}</span> <span class="meta">{{ c.timestamp[:16] }} · {{ c.full_name or "—" }}</span></div><div class="meta">{{ c.notes or '' }}</div></div>{% endfor %}
+    {% for c in contacts %}<div class="list-line"><div><span class="badge {{ 'ok' if c.picked_up else 'danger' }}">{{ _('Picked Up') if c.picked_up else _('No Answer') }}</span> <span class="meta">{{ c.timestamp[:16] }} · {{ c.full_name or "—" }}</span></div><div class="meta">{{ c.notes or '' }}</div></div>{% endfor %}
   </details>
   {% endif %}
 </div>
@@ -172,9 +172,9 @@
       <div class="field"><label for="inpatientdetail-14-method">{{ _('Method') }}</label>
         <select id="inpatientdetail-14-method" name="method">
           {% set m = fv(form, 'method', 'Cash') if payment_error else 'Cash' %}
-          <option {{ 'selected' if m=='Cash' }}>{{ _('Cash') }}</option>
-          <option {{ 'selected' if m=='Card' }}>{{ _('Card') }}</option>
-          <option {{ 'selected' if m=='Transfer' }}>{{ _('Transfer') }}</option>
+          <option value="Cash" {{ 'selected' if m=='Cash' }}>{{ _('Cash') }}</option>
+          <option value="Card" {{ 'selected' if m=='Card' }}>{{ _('Card') }}</option>
+          <option value="Transfer" {{ 'selected' if m=='Transfer' }}>{{ _('Transfer') }}</option>
         </select>
       </div>
       <button class="btn small secondary" type="submit">{{ _('Add') }}</button>
@@ -245,7 +245,7 @@ toggleDismissal();
 // checkbox list's own batch-submit behavior (check several, one "Add to
 // Bill" click). Unlike visit billing's cart, this one always starts
 // empty — it's purely for adding new lines, same as the old checkbox
-// list never pre-checked already-billed items either; "Bill so Far"
+// list never pre-checked already-billed items either; {{ _('Bill so Far')|tojson }}
 // below already shows what's on the bill.
 let inpatientBillCart = [];
 
@@ -261,20 +261,20 @@ inpatientBillSearchInput.addEventListener('input', () => {
     fetch(`{{ url_for('inventory.api_price_list_lookup') }}?q=${encodeURIComponent(q)}&category=Service&category=Medicine`)
       .then(r => r.json())
       .then(list => {
-        if (!list.length) { inpatientBillResultsDiv.innerHTML = '<div class="empty-note">No matches.</div>'; return; }
+        if (!list.length) { inpatientBillResultsDiv.innerHTML = '<div class="empty-note">' + {{ _('No matches.')|tojson }} + '</div>'; return; }
         window.__inpatientBillResults = list;
         inpatientBillResultsDiv.innerHTML = list.map((i, idx) =>
           `<div class="list-line" style="cursor:pointer;" data-idx="${idx}" data-vz-act="inpatient-detail-10">
-             <div class="who">${escapeHtml(i.name)}</div><div class="meta">${i.category} · ${i.price != null ? i.price + ' {{ currency_label() }}' : 'no price set'}</div>
+             <div class="who">${escapeHtml(i.name)}</div><div class="meta">${i.category} · ${i.price != null ? i.price + ' {{ currency_label() }}' : {{ _('no price set')|tojson }}}</div>
            </div>`
         ).join('');
       })
-      .catch(() => { inpatientBillResultsDiv.innerHTML = '<div class="empty-note">Could not search the Price List; check server connection.</div>'; });
+      .catch(() => { inpatientBillResultsDiv.innerHTML = '<div class="empty-note">' + {{ _('Could not search the Price List; check server connection.')|tojson }} + '</div>'; });
   }, 200);
 });
 
 function addToInpatientBillCart(item) {
-  if (item.price == null) { window.VZToast.show(item.name + ' has no sale price set in the Price List.', 'error'); return; }
+  if (item.price == null) { window.VZToast.show({{ _('{name} has no sale price set in the Price List.')|tojson }}.replace('{name}', item.name), 'error'); return; }
   const existing = inpatientBillCart.find(c => c.id === item.id);
   if (existing) { existing.qty += 1; } else { inpatientBillCart.push({id: item.id, name: item.name, price: item.price, qty: 1}); }
   inpatientBillSearchInput.value = '';
@@ -299,7 +299,7 @@ function removeInpatientBillLine(id) {
 }
 function renderInpatientBillCart() {
   const cartDiv = document.getElementById('inpatientBillCart');
-  if (!inpatientBillCart.length) { cartDiv.innerHTML = '<div class="empty-note">No items added yet.</div>'; return; }
+  if (!inpatientBillCart.length) { cartDiv.innerHTML = '<div class="empty-note">' + {{ _('No items added yet.')|tojson }} + '</div>'; return; }
   cartDiv.innerHTML = inpatientBillCart.map(c => `
     <div class="pos-cart-line">
       <div>${escapeHtml(c.name)}<div class="meta small">${c.price} {{ currency_label() }} each</div></div>
@@ -314,7 +314,7 @@ function renderInpatientBillCart() {
 renderInpatientBillCart();
 
 function prepareInpatientBillingSubmit() {
-  if (!inpatientBillCart.length) { window.VZToast.show('Add at least one procedure first.', 'error'); return false; }
+  if (!inpatientBillCart.length) { window.VZToast.show({{ _('Add at least one procedure first.')|tojson }}, 'error'); return false; }
   const container = document.getElementById('inpatientBillFieldsHidden');
   container.innerHTML = '';
   inpatientBillCart.forEach(c => {

@@ -30,7 +30,7 @@ from flask import (
     Flask, render_template, request, redirect, url_for, flash, g, jsonify,
     session, send_from_directory, send_file, abort
 )
-from flask_babel import Babel, get_locale, gettext as _
+from flask_babel import Babel, get_locale, gettext as _, format_date
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import CSRFError
 from werkzeug.exceptions import HTTPException
@@ -221,6 +221,14 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=SESSION_LIFETIME_HOUR
 # token, not an expired session. Tied to the same value so the two cannot
 # drift apart again; raising SESSION_LIFETIME_HOURS now raises both.
 app.config["WTF_CSRF_TIME_LIMIT"] = int(SESSION_LIFETIME_HOURS * 3600)
+
+# The port the app actually binds. Module level rather than a local in main()
+# because the dashboard tells staff the address to reach this app on, and it
+# used to say ":5050" as a hard-coded literal — wrong the moment the port is
+# changed, which is not hypothetical: the two installs on one machine collide
+# on the defaults and JO had to move (COMPARISON.md §54). JO already derived
+# it; IQ did not. SEAM_RULES.md.
+BIND_PORT = int(os.environ.get("VETCLINICSYSTEMIQ_PORT", "5050"))
 
 # Optional network allowlist: comma-separated CIDR blocks (e.g.
 # "192.168.1.0/24,10.0.0.5/32"). Unset by default — no behavior change
@@ -502,6 +510,22 @@ def localdate_filter(d):
     return formatted
 
 
+@app.template_filter("weekdate")
+def weekdate_filter(d):
+    """Short "Mon 14 Sep" style date, in the current locale.
+
+    strftime's %a/%b are C-locale and stay English no matter what Babel is
+    set to, so they cannot be used for anything a user reads."""
+    if not d:
+        return ""
+    # flask_babel.format_date resolves the locale from the request itself;
+    # it takes no `locale=` keyword (that is babel.dates.format_date).
+    formatted = format_date(d, "EEE d MMM")
+    if str(get_locale()) == "ar":
+        formatted = to_arabic_indic_digits(formatted)
+    return formatted
+
+
 def cached_dashboard_snapshot(db):
     """dashboard_snapshot() scans several tables. It's needed on every page
     (for the nav alert badge) and again on the dashboard route itself —
@@ -569,6 +593,7 @@ def form_value(form, name, default=""):
 app.jinja_env.globals["pagination_url"] = pagination_url
 app.jinja_env.globals["has_permission"] = auth.has_permission
 app.jinja_env.globals["static_asset"] = static_asset
+app.jinja_env.globals["bind_port"] = BIND_PORT
 app.jinja_env.globals["fv"] = form_value
 app.jinja_env.globals["CLEANUP_CAP"] = money.CLEANUP_CAP
 
@@ -1468,8 +1493,7 @@ if __name__ == "__main__":
         # BEHIND_TLS_PROXY above is how this app supports HTTPS: via a
         # reverse proxy in front, not a certificate handed to serve()).
         bind_host = os.environ.get("VETCLINICSYSTEMIQ_HOST", "0.0.0.0")
-        bind_port = int(os.environ.get("VETCLINICSYSTEMIQ_PORT", "5050"))
         scheme = "https" if BEHIND_TLS_PROXY else "http"
         print(f"VetClinicSystem IQ is running — reachable on the clinic network at "
-              f"{scheme}://{lan_address()}:{bind_port}")
-        serve(app, host=bind_host, port=bind_port, threads=8)
+              f"{scheme}://{lan_address()}:{BIND_PORT}")
+        serve(app, host=bind_host, port=BIND_PORT, threads=8)
