@@ -5,7 +5,7 @@
 <div class="page-head">
   <div>
     <h1>{{ case.animal_name }} <span class="muted" style="font-weight:400;font-size:16px;">— {{ case.owner_name }}</span></h1>
-    <p class="page-sub">Admitted {{ case.admission_date }} · <span class="badge {{ 'ok' if case.dismissed else 'warn' }}">{{ 'Discharged' if case.dismissed else 'Admitted' }}</span></p>
+    <p class="page-sub">Admitted {{ case.admission_date|localdate }} · <span class="badge {{ 'ok' if case.dismissed else 'warn' }}">{{ 'Discharged' if case.dismissed else 'Admitted' }}</span></p>
   </div>
   <a class="btn secondary" href="{{ url_for('clinical.inpatient_export_pdf', case_id=case.id) }}">Export Inpatient (PDF)</a>
 </div>
@@ -148,27 +148,27 @@
     <div class="pos-cart-line">
       <div>{{ l.name }} × {{ l.quantity }}</div>
       <div style="display:flex; gap:10px; align-items:center;">
-        {{ l.line_total|money }} IQD
+        {{ l.line_total|money }} {{ currency_label() }}
         <form method="post" action="{{ url_for('clinical.inpatient_billing_delete', case_id=case.id, line_id=l.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small danger" type="submit">×</button></form>
       </div>
     </div>
     {% else %}<div class="empty-note">No procedures billed yet.</div>{% endfor %}
 
-    <div class="detail-item" style="margin-top:12px;"><div class="k">Subtotal</div><div class="v">{{ billing.subtotal|money }} IQD</div></div>
+    <div class="detail-item" style="margin-top:12px;"><div class="k">Subtotal</div><div class="v">{{ billing.subtotal|money }} {{ currency_label() }}</div></div>
     <form method="post" action="{{ url_for('clinical.inpatient_discount_save', case_id=case.id) }}" style="display:flex; gap:8px; align-items:flex-end; margin:8px 0;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field" style="flex:1;"><label for="inpatientdetail-11-discount_percent">Discount % (Max {{ discount_cap }}%)</label><input id="inpatientdetail-11-discount_percent" type="number" name="discount_percent" max="{{ discount_cap }}" min="0" value="{{ fv(form, 'discount_percent', billing.discount_percent) if discount_error else billing.discount_percent }}"></div>
       <button class="btn small secondary" type="submit">Apply</button>
     </form>
-    <div class="detail-item"><div class="k">Total</div><div class="v" style="font-size:20px; font-weight:700;">{{ billing.total|money }} IQD</div></div>
-    {% if billing.cleanup_amount %}<div class="detail-item"><div class="k">Clean Up applied</div><div class="v">{{ billing.cleanup_amount|money }} IQD</div></div>{% endif %}
+    <div class="detail-item"><div class="k">Total</div><div class="v" style="font-size:20px; font-weight:700;">{{ billing.total|money }} {{ currency_label() }}</div></div>
+    {% if billing.cleanup_amount %}<div class="detail-item"><div class="k">Clean Up applied</div><div class="v">{{ billing.cleanup_amount|money }} {{ currency_label() }}</div></div>{% endif %}
     <span class="badge {{ 'ok' if billing.status=='Fully Paid' else ('danger' if billing.status=='Unpaid' else 'muted') }}">{{ billing.status }}</span>
 
     <form method="post" action="{{ url_for('clinical.inpatient_payment_add', case_id=case.id) }}" style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line); display:flex; gap:8px; align-items:flex-end;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <div class="field" style="flex:1;"><label for="inpatientdetail-12-amount">Record Payment (IQD)</label><input id="inpatientdetail-12-amount" type="number" step="1" name="amount" required value="{{ fv(form, 'amount') if payment_error else '' }}"></div>
-      <div class="field"><label for="inpatientdetail-13-cleanup_amount">Clean Up (max {{ CLEANUP_CAP }} IQD)</label><input id="inpatientdetail-13-cleanup_amount" type="number" step="1" min="0" name="cleanup_amount" value="{{ fv(form, 'cleanup_amount') if payment_error else '0' }}"></div>
+      <div class="field" style="flex:1;"><label for="inpatientdetail-12-amount">Record Payment ({{ currency_label() }})</label><input id="inpatientdetail-12-amount" type="number" step="1" name="amount" required value="{{ fv(form, 'amount') if payment_error else '' }}"></div>
+      <div class="field"><label for="inpatientdetail-13-cleanup_amount">Clean Up (max {{ CLEANUP_CAP }} {{ currency_label() }})</label><input id="inpatientdetail-13-cleanup_amount" type="number" step="1" min="0" name="cleanup_amount" value="{{ fv(form, 'cleanup_amount') if payment_error else '0' }}"></div>
       <div class="field"><label for="inpatientdetail-14-method">Method</label>
         <select id="inpatientdetail-14-method" name="method">
           {% set m = fv(form, 'method', 'Cash') if payment_error else 'Cash' %}
@@ -179,7 +179,7 @@
       </div>
       <button class="btn small secondary" type="submit">Add</button>
     </form>
-    {% for p in payments %}<div class="list-line small"><div>{{ p.date }} — {{ p.method }}</div><div>{{ p.amount|money }} IQD</div></div>{% endfor %}
+    {% for p in payments %}<div class="list-line small"><div>{{ p.date|localdate }} — {{ p.method }}</div><div>{{ p.amount|money }} {{ currency_label() }}</div></div>{% endfor %}
   </div>
 </div>
 
@@ -265,7 +265,7 @@ inpatientBillSearchInput.addEventListener('input', () => {
         window.__inpatientBillResults = list;
         inpatientBillResultsDiv.innerHTML = list.map((i, idx) =>
           `<div class="list-line" style="cursor:pointer;" data-idx="${idx}" data-vz-act="inpatient-detail-10">
-             <div class="who">${escapeHtml(i.name)}</div><div class="meta">${i.category} · ${i.price != null ? i.price + ' IQD' : 'no price set'}</div>
+             <div class="who">${escapeHtml(i.name)}</div><div class="meta">${i.category} · ${i.price != null ? i.price + ' {{ currency_label() }}' : 'no price set'}</div>
            </div>`
         ).join('');
       })
@@ -302,7 +302,7 @@ function renderInpatientBillCart() {
   if (!inpatientBillCart.length) { cartDiv.innerHTML = '<div class="empty-note">No items added yet.</div>'; return; }
   cartDiv.innerHTML = inpatientBillCart.map(c => `
     <div class="pos-cart-line">
-      <div>${escapeHtml(c.name)}<div class="meta small">${c.price} IQD each</div></div>
+      <div>${escapeHtml(c.name)}<div class="meta small">${c.price} {{ currency_label() }} each</div></div>
       <div style="display:flex; align-items:center; gap:6px;">
         <button class="btn small secondary" type="button" data-vz-act="inpatient-detail-11" data-line-id="${c.id}">-</button>
         <input type="number" min="1" value="${c.qty}" style="width:56px; text-align:center;" data-vz-change="inpatient-detail-12" data-line-id="${c.id}">
