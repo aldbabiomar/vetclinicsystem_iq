@@ -365,7 +365,7 @@ def discount_percent_error(percent, cap):
     change would need to touch) is factored out. Returns an error string,
     or None if percent is valid."""
     if percent > cap or percent < 0:
-        return _("Discount must be between 0%% and %(cap)s%% for your role.", cap=cap)
+        return _("Discount must be between 0%% and %(cap)s%% for your role.", cap=display_number(cap))
     return None
 
 
@@ -377,7 +377,7 @@ def cleanup_amount_error(new_amount, existing_amount, balance):
     if new_amount < 0:
         return _("Clean Up amount can't be negative.")
     if existing_amount + new_amount > money.CLEANUP_CAP:
-        return _("Clean Up can't exceed %(cap)s IQD total on this bill.", cap=money.CLEANUP_CAP)
+        return _("Clean Up on this bill can't exceed %(cap)s IQD in total.", cap=display_number(money.CLEANUP_CAP))
     if new_amount > balance:
         return _("Clean Up can't exceed the remaining balance.")
     return None
@@ -445,3 +445,20 @@ def to_arabic_indic_digits(s):
     if s is None:
         return s
     return str(s).translate(_ARABIC_INDIC_DIGITS)
+
+
+def display_number(v):
+    """A number on its way INTO a user-facing message.
+
+    The Arabic-Indic decision covers display text, and a flash message is
+    display text -- without this, "الخصم بين ٠٪ و 25٪" mixes both numeral
+    systems in one sentence. Same boundary as to_arabic_indic_digits(): this
+    is for messages only, never for a value that will be parsed back.
+    """
+    from flask_babel import get_locale
+    try:
+        if str(get_locale()) == "ar":
+            return to_arabic_indic_digits(str(v))
+    except RuntimeError:
+        pass          # outside a request context: plain digits
+    return v
