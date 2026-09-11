@@ -3,6 +3,14 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.14.1] - 2026-09-11
+
+### Fixed
+- **The new stock-count checks now also reach an existing installation.** In
+  v1.14.0 they were applied when a database was created, which meant a clinic
+  updating an existing one did not get them. Updating now adds them, and
+  quietly corrects any impossible count already stored.
+
 ## [1.14.0] - 2026-09-11
 
 ### Fixed
