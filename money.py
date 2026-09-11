@@ -44,6 +44,33 @@ def round_to_denomination(amount, denom=SMALLEST_NOTE, mode="nearest"):
     return math.floor(amount / denom + 0.5) * denom
 
 
+def payable_total(raw_total, discount_percent=0, denom=SMALLEST_NOTE):
+    """Round a payable amount to the note WITHOUT ever presenting a genuinely
+    non-zero charge as free.
+
+    This is the single source of truth for that rule. It exists because the
+    rule used to live inline in logic.compute_bill_totals() and nowhere else:
+    pos_checkout() did the bare round_to_denomination() and so recorded a
+    total of 0 for any cart under half a note -- goods left the shop free,
+    and since change is cash_received minus total, the till handed back every
+    dinar tendered. The bill path floored the identical subtotal to 250.
+    Two call sites, one rule, one of them missing it. Call this from both
+    rather than reintroducing the comparison by hand.
+
+    A 100% discount is an intentional waiver, not a rounding accident, so it
+    stays exempt -- that carve-out is part of the rule and moves with it.
+
+    `<= denom / 2`, not `<`: round_to_denomination() already rounds exactly
+    half a note up (true half-up), so this only actually fires below the
+    halfway point in practice. The `<=` just avoids leaving a gap at the
+    boundary that would depend on round_to_denomination's internals.
+    """
+    total = round_to_denomination(raw_total, denom)
+    if 0 < raw_total <= denom / 2 and (discount_percent or 0) < 100:
+        return denom
+    return total
+
+
 def fmt_money(amount):
     """Display formatting — whole-number + thousands separator. Does NOT
     imply 250-rounding; callers must round first if the figure is a

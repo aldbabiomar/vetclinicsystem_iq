@@ -159,7 +159,15 @@ def _priced_cart_lines(db, qty_by_item, cost_by_item, distributor_by_item):
         # POS with no limit at all, silently and deterministically (not just
         # under a race). A clinic sells a brand-new item for the first time by
         # running a quick audit on it first, same as any other item.
-        if status and status["current_stock"] is None:
+        # `!= itself` is the NaN test: a stored NaN count would otherwise reach
+        # the comparison below, where `qty > nan` is False and the oversell
+        # guard passes an empty shelf without limit. _save_audit_lines() now
+        # rejects NaN at entry; this is the second layer, so a count that
+        # predates that fix (or arrives by any future path) fails closed here
+        # rather than silently disabling the check. Same branch as
+        # never-audited, because "no usable count" is what both mean.
+        if status and (status["current_stock"] is None
+                       or status["current_stock"] != status["current_stock"]):
             return 0, [], notices, (
                 f"{status['name']} hasn't been through an inventory audit yet — "
                 "run an audit before selling it.")
@@ -296,7 +304,11 @@ def pos_checkout():
     if not lines:
         return refuse("Nothing to sell.")
 
-    total = money.round_to_denomination(subtotal * (1 - discount_percent / 100))
+    # payable_total(), not a bare round_to_denomination(): a cart under half a
+    # note used to round to 0 here, which sold the goods for nothing AND
+    # returned every dinar tendered as change (change is cash_received minus
+    # total). compute_bill_totals() has always floored this; POS did not.
+    total = money.payable_total(subtotal * (1 - discount_percent / 100), discount_percent)
     try:
         cleanup_amount = parse_money(f.get("cleanup_amount")) or 0
     except BadNumber:
@@ -514,6 +526,22 @@ def refund_retail_save():
     already_refunded_total = db.execute(
         "SELECT COALESCE(SUM(amount),0) s FROM refunds WHERE sale_id=? AND refund_type='retail'", (sale_id,)
     ).fetchone()["s"]
+    # Rounding DOWN must never settle a real return at zero. A line worth less
+    # than one note rounded to 0, so the customer handed the goods back, the
+    # item was restocked, the sale's refundable headroom was consumed -- and
+    # nothing was paid out. Pay one note instead, which for the common
+    # single-line case is exact restitution rather than generosity: the
+    # anti-"looks free" floor means the customer really did pay 250 for it.
+    # Still bounded by what this sale actually collected, so a multi-line sale
+    # can't be over-refunded by repeating this.
+    if total > 0 and rounded_total == 0:
+        headroom = sale["total"] - already_refunded_total
+        if headroom < money.SMALLEST_NOTE:
+            flash(f"This sale has no refundable value left to pay out — the smallest note is "
+                  f"{money.SMALLEST_NOTE} IQD and only {logic.fmt_money(max(headroom, 0))} IQD "
+                  f"of this sale is still refundable.", "error")
+            return redisplay()
+        rounded_total = money.SMALLEST_NOTE
     if already_refunded_total + rounded_total > sale["total"] + 1e-9:
         flash(f"That's more than this sale actually collected ({logic.fmt_money(sale['total'])} IQD, after any "
               f"Clean Up applied at sale time) minus what's already been refunded.", "error")
@@ -803,5 +831,9 @@ def cash_register_audit_new():
     if status == "Perfect":
         flash(f"Audit recorded for {day}: Perfect — counted cash matches the system exactly.", "success")
     else:
-        flash(f"Audit recorded for {day}: {status} of {logic.fmt_money(abs(difference))} IQD.", "error")
+        # "warning", not "error": the audit DID save. Flashing a saved
+        # record in the same red as a failure reads as "that did not work"
+        # and invites staff to re-run the count. The discrepancy still
+        # needs attention, which is what the warning state is for.
+        flash(f"Audit recorded for {day}: {status} of {logic.fmt_money(abs(difference))} IQD.", "warning")
     return redirect(url_for("sales.cash_register_page", date=day))
