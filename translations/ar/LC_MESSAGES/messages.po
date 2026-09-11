@@ -264,7 +264,7 @@ msgstr "تفريغ الغدد الشرجية"
 
 #: enum_labels.py:56
 msgid "Zoning"
-msgstr "تشذيب المنطقة الحساسة"
+msgstr "تهذيب المنطقة الحساسة"
 
 #: enum_labels.py:60 templates/boarding.html:88 templates/cash_register.html:55
 #: templates/cash_register.html:64 templates/inpatient_detail.html:175
