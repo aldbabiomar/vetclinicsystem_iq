@@ -18,6 +18,7 @@ import re
 import socket
 from datetime import datetime
 
+from flask_babel import lazy_gettext as _l, gettext as _
 from flask import flash, g, render_template, request, url_for
 
 import db as dbmod
@@ -342,7 +343,7 @@ def required_field(f, key, label):
     which NOT NULL alone does not. See ERROR_500_AUDIT.md E-04."""
     val = (f.get(key) or "").strip()
     if not val:
-        flash(f"{label} is required.", "error")
+        flash(_("%(label)s is required.", label=label), "error")
         return None
     return val
 
@@ -364,7 +365,7 @@ def discount_percent_error(percent, cap):
     change would need to touch) is factored out. Returns an error string,
     or None if percent is valid."""
     if percent > cap or percent < 0:
-        return f"Discount must be between 0% and {cap}% for your role."
+        return _("Discount must be between 0%% and %(cap)s%% for your role.", cap=cap)
     return None
 
 
@@ -374,11 +375,11 @@ def cleanup_amount_error(new_amount, existing_amount, balance):
     POS checkout), same convention as discount_percent_error() above.
     Returns an error string, or None if new_amount is valid."""
     if new_amount < 0:
-        return "Clean Up amount can't be negative."
+        return _("Clean Up amount can't be negative.")
     if existing_amount + new_amount > money.CLEANUP_CAP:
-        return f"Clean Up can't exceed {money.CLEANUP_CAP} IQD total on this bill."
+        return _("Clean Up can't exceed %(cap)s IQD total on this bill.", cap=money.CLEANUP_CAP)
     if new_amount > balance:
-        return "Clean Up can't exceed the remaining balance."
+        return _("Clean Up can't exceed the remaining balance.")
     return None
 
 
@@ -414,3 +415,33 @@ def csp_nonce():
         value = secrets.token_urlsafe(16)
         g._csp_nonce = value
     return value
+
+
+# ---------------------------------------------------------------------------
+# Arabic-Indic numerals — display only
+# ---------------------------------------------------------------------------
+_ARABIC_INDIC_DIGITS = str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")
+
+
+def to_arabic_indic_digits(s):
+    """Substitute Eastern Arabic-Indic digits into an ALREADY-FORMATTED string.
+
+    Display only, and the boundary is not decoration -- see
+    ARABIC_LOCALIZATION_PLAN.md §7.1:
+
+      - never on a value that will be parsed back (parse_money, a submitted
+        form value). Every calculation happens in Western digits and this runs
+        at the very last step, on its way into a template.
+      - never on an editable <input>'s value. A number input's underlying
+        value is a Western-digit string in every browser regardless of locale,
+        so converting what is displayed risks a mismatch with what the
+        keyboard types and what gets submitted.
+      - never on an ID or reference code (V0001, INV301). Those are
+        identifiers, matched elsewhere as literal strings, not quantities.
+      - never inside pdf_export.py. PDFs stay English with Western digits,
+        permanently (§0). If this helper is ever tempting to call from that
+        module, something has been wired wrong.
+    """
+    if s is None:
+        return s
+    return str(s).translate(_ARABIC_INDIC_DIGITS)
