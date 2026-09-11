@@ -15,20 +15,20 @@
 
 <div id="inventory-catalog-region">
 <div class="filter-chips">
-  <a class="chip {{ 'active' if not show_inactive }}" href="{{ url_for('inventory.inventory_catalog') }}">Active</a>
-  <a class="chip {{ 'active' if show_inactive }}" href="{{ url_for('inventory.inventory_catalog', inactive=1) }}">Include Inactive</a>
+  <a class="chip {{ 'active' if not show_inactive }}" href="{{ url_for('inventory.inventory_catalog') }}">{{ _('Active') }}</a>
+  <a class="chip {{ 'active' if show_inactive }}" href="{{ url_for('inventory.inventory_catalog', inactive=1) }}">{{ _('Include Inactive') }}</a>
 </div>
 
 {% if flagged_inventory %}
 <p class="small muted u-lead-out"><span class="legend-swatch"></span>
-  Highlighted rows: this Retail item has no matching entry in the Price List — check Price List's Linked Inventory Item.</p>
+  {{ _('Highlighted rows: this Retail item has no matching entry in the Price List — check Price List\'s Linked Inventory Item.') }}</p>
 {% endif %}
 
 <form class="search-bar" method="get">
   {% if show_inactive %}<input type="hidden" name="inactive" value="1">{% endif %}
   <input type="text" name="q" value="{{ search }}" placeholder="{{ _('Search by Product Name…') }}">
   <button class="btn secondary" type="submit">{{ _('Search') }}</button>
-  {% if search %}<a class="btn secondary" href="{{ url_for('inventory.inventory_catalog', inactive=1 if show_inactive else None) }}">Clear</a>{% endif %}
+  {% if search %}<a class="btn secondary" href="{{ url_for('inventory.inventory_catalog', inactive=1 if show_inactive else None) }}">{{ _('Clear') }}</a>{% endif %}
 </form>
 
 <div class="card" id="newForm" style="display:{{ 'block' if show_new_form else 'none' }}; margin-bottom:16px;">
@@ -97,7 +97,7 @@
         </form>
       </td>
     </tr>
-    {% else %}<tr><td colspan="9" class="empty-note">No inventory items yet.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="9" class="empty-note">{{ _('No inventory items yet.') }}</td></tr>{% endfor %}
   </tbody>
 </table>
 </div>
@@ -116,15 +116,15 @@ function toggleDistEdit(id) {
   <div class="modal-box u-w-520">
     <h2 class="u-mt-0" id="barcodeModalTitle">{{ _('Manage Barcode') }}</h2>
     <p class="small muted u-mt-tight">
-      Every item has at most one barcode — either a real one scanned or typed in from its own
+      {{ _('Every item has at most one barcode — either a real one scanned or typed in from its own
       packaging, or one VetClinicSystem IQ creates for you to print. Never both at once: setting one up
-      below turns off the other option until you remove it.
+      below turns off the other option until you remove it.') }}
     </p>
     <div id="barcodeModalError" class="small" style="color:var(--danger); display:none; margin-bottom:10px;"></div>
 
     <div class="sub-panel u-mb-5" id="barcodeManualSection">
-      <div class="sub-panel-title" id="barcodeManualTitle">Manually Enter Barcode</div>
-      <p class="small muted u-mb-3-flush">Click into the box and type, or just scan the barcode already printed on this item's packaging — a scanner types it in for you.</p>
+      <div class="sub-panel-title" id="barcodeManualTitle">{{ _('Manually Enter Barcode') }}</div>
+      <p class="small muted u-mb-3-flush">{{ _('Click into the box and type, or just scan the barcode already printed on this item\'s packaging — a scanner types it in for you.') }}</p>
       <div class="u-row-sm">
         <input class="u-grow u-mono" type="text" id="barcodeManualInput" placeholder="{{ _('Scan or type a barcode…') }}" maxlength="64">
         <button class="btn small" type="button" id="barcodeManualSaveBtn" data-vzh="inventory-catalog-8">{{ _('Save') }}</button>
@@ -135,11 +135,11 @@ function toggleDistEdit(id) {
     </div>
 
     <div class="sub-panel" id="barcodeGeneratedSection">
-      <div class="sub-panel-title" id="barcodeGeneratedTitle">Create Barcode</div>
-      <p class="small muted u-mb-3-flush" id="barcodeGeneratedHint">No barcode on the packaging? VetClinicSystem IQ can create one and print a label to stick on the item.</p>
+      <div class="sub-panel-title" id="barcodeGeneratedTitle">{{ _('Create Barcode') }}</div>
+      <p class="small muted u-mb-3-flush" id="barcodeGeneratedHint">{{ _('No barcode on the packaging? VetClinicSystem IQ can create one and print a label to stick on the item.') }}</p>
       <div class="u-row-sm">
         <button class="btn small secondary" type="button" id="barcodeCreateBtn" data-vzh="inventory-catalog-10">{{ _('Create Now') }}</button>
-        <a class="btn small secondary" id="barcodePrintBtn" href="#" style="display:none;">Print</a>
+        <a class="btn small secondary" id="barcodePrintBtn" href="#" style="display:none;">{{ _('Print') }}</a>
         <button class="btn small danger" type="button" id="barcodeGeneratedRemoveBtn" style="display:none;" data-vzh="inventory-catalog-11">{{ _('Remove Barcode') }}</button>
       </div>
     </div>
@@ -154,12 +154,12 @@ function toggleDistEdit(id) {
   <div class="modal-box u-w-560">
     <h2 class="u-mt-0">{{ _('Bulk Barcode Print') }}</h2>
     <p class="small muted u-mt-tight">
-      Every item with a VetClinicSystem-created barcode. Set how many labels each one needs, remove any
-      you don't want on this run, then print them all together.
+      {{ _('Every item with a VetClinicSystem-created barcode. Set how many labels each one needs, remove any
+      you don\'t want on this run, then print them all together.') }}
     </p>
     <div id="bulkBarcodeError" class="small" style="color:var(--danger); display:none; margin-bottom:10px;"></div>
-    <p id="bulkBarcodeLoading" class="small muted">Loading…</p>
-    <p id="bulkBarcodeEmpty" class="small muted" style="display:none;">Nothing left to print.</p>
+    <p id="bulkBarcodeLoading" class="small muted">{{ _('Loading…') }}</p>
+    <p id="bulkBarcodeEmpty" class="small muted" style="display:none;">{{ _('Nothing left to print.') }}</p>
     <div class="scroll-box tall" id="bulkBarcodeList"></div>
     <div class="u-row-end u-mt-7">
       <button class="btn secondary" type="button" data-close-modal>{{ _('Cancel') }}</button>
