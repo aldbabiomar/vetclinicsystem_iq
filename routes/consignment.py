@@ -17,6 +17,7 @@ import logic
 import money
 import pdf_export
 
+from flask_babel import gettext as _
 from flask import (
     Blueprint, abort, flash, jsonify, redirect, render_template, request, send_file, session, url_for
 )
@@ -58,18 +59,18 @@ def distributor_new():
     try:
         phone = normalize_phone(f.get("phone"))
     except BadPhone:
-        flash("That phone number doesn't look valid — check the digits and try again.", "error")
+        flash(_("That phone number doesn't look valid — check the digits and try again."), "error")
         return redisplay()
     try:
         lead_time_days = parse_int(f.get("lead_time_days"))
     except BadNumber:
-        flash("Lead Time (Days) must be a whole number.", "error")
+        flash(_("Lead Time (Days) must be a whole number."), "error")
         return redisplay()
     # Lead time drives the reorder point in the ordering sheet: a negative
     # one asks for stock to arrive before it was ordered. IQ and JO both
     # parsed it without a sign check.
     if lead_time_days is not None and lead_time_days < 0:
-        flash("Lead Time (Days) can't be negative.", "error")
+        flash(_("Lead Time (Days) can't be negative."), "error")
         return redisplay()
     name = required_field(f, "name", "Name")
     if name is None:
@@ -83,7 +84,7 @@ def distributor_new():
     )
     auth.log_change(db, "distributors", did, "create")
     db.commit()
-    flash(f"{did} added.", "success")
+    flash(_("%(did)s added.", did=did), "success")
     return redirect(url_for("consignment.distributors_list"))
 
 
@@ -99,18 +100,18 @@ def distributor_edit(dist_id):
     try:
         phone = normalize_phone(f.get("phone"))
     except BadPhone:
-        flash("That phone number doesn't look valid — check the digits and try again.", "error")
+        flash(_("That phone number doesn't look valid — check the digits and try again."), "error")
         return redisplay()
     try:
         lead_time_days = parse_int(f.get("lead_time_days"))
     except BadNumber:
-        flash("Lead Time (Days) must be a whole number.", "error")
+        flash(_("Lead Time (Days) must be a whole number."), "error")
         return redisplay()
     # Lead time drives the reorder point in the ordering sheet: a negative
     # one asks for stock to arrive before it was ordered. IQ and JO both
     # parsed it without a sign check.
     if lead_time_days is not None and lead_time_days < 0:
-        flash("Lead Time (Days) can't be negative.", "error")
+        flash(_("Lead Time (Days) can't be negative."), "error")
         return redisplay()
     old = db.execute("SELECT * FROM distributors WHERE id=?", (dist_id,)).fetchone()
     name = required_field(f, "name", "Name")
@@ -127,7 +128,7 @@ def distributor_edit(dist_id):
     )
     auth.log_change(db, "distributors", dist_id, "update", changes)
     db.commit()
-    flash("Distributor updated.", "success")
+    flash(_("Distributor updated."), "success")
     return redirect(url_for("consignment.distributors_list"))
 
 
@@ -136,7 +137,7 @@ def distributor_edit(dist_id):
 def distributor_delete(dist_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM distributors WHERE id=?", (dist_id,)).fetchone():
-        flash("Distributor not found.", "error")
+        flash(_("Distributor not found."), "error")
         return redirect(url_for("consignment.distributors_list"))
     # A distributor can be referenced from six tables (inventory items,
     # manual ledger bills, and every Consignment table) — a bare DELETE
@@ -159,7 +160,7 @@ def distributor_delete(dist_id):
     db.execute("DELETE FROM distributors WHERE id=?", (dist_id,))
     auth.log_change(db, "distributors", dist_id, "delete")
     db.commit()
-    flash("Distributor deleted.", "success")
+    flash(_("Distributor deleted."), "success")
     return redirect(url_for("consignment.distributors_list"))
 
 
@@ -202,10 +203,10 @@ def distributor_bill_new(dist_id):
     try:
         total_amount = parse_money(f.get("total_amount"), required=True)
     except BadNumber:
-        flash("Total amount must be a valid number.", "error")
+        flash(_("Total amount must be a valid number."), "error")
         return redisplay()
     if total_amount <= 0:
-        flash("Total amount must be greater than zero.", "error")
+        flash(_("Total amount must be greater than zero."), "error")
         return redisplay()
     try:
         bill_date = clean_date(f.get("bill_date"), field="bill_date") or date.today().isoformat()
@@ -221,7 +222,7 @@ def distributor_bill_new(dist_id):
     )
     auth.log_change(db, "distributor_bills", bid, "create")
     db.commit()
-    flash(f"Bill {bid} logged.", "success")
+    flash(_("Bill %(bid)s logged.", bid=bid), "success")
     return redirect(url_for("consignment.distributor_detail", dist_id=dist_id))
 
 
@@ -230,18 +231,18 @@ def distributor_bill_new(dist_id):
 def distributor_bill_delete(dist_id, bill_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM distributor_bills WHERE id=? AND distributor_id=?", (bill_id, dist_id)).fetchone():
-        flash("Bill not found.", "error")
+        flash(_("Bill not found."), "error")
         return redirect(url_for("consignment.distributor_detail", dist_id=dist_id))
     has_payments = db.execute(
         "SELECT 1 FROM distributor_bill_payments WHERE bill_id=? LIMIT 1", (bill_id,)
     ).fetchone()
     if has_payments:
-        flash("Delete the payments on this bill first.", "error")
+        flash(_("Delete the payments on this bill first."), "error")
         return redirect(url_for("consignment.distributor_detail", dist_id=dist_id))
     db.execute("DELETE FROM distributor_bills WHERE id=? AND distributor_id=?", (bill_id, dist_id))
     auth.log_change(db, "distributor_bills", bill_id, "delete")
     db.commit()
-    flash("Bill deleted.", "success")
+    flash(_("Bill deleted."), "success")
     return redirect(url_for("consignment.distributor_detail", dist_id=dist_id))
 
 
@@ -265,15 +266,15 @@ def distributor_payment_new(dist_id, bill_id):
         "SELECT * FROM distributor_bills WHERE id=? AND distributor_id=? FOR UPDATE", (bill_id, dist_id)
     ).fetchone()
     if not bill:
-        flash("Bill not found.", "error")
+        flash(_("Bill not found."), "error")
         return redirect(url_for("consignment.distributor_detail", dist_id=dist_id))
     try:
         amount = parse_money(f.get("amount"), required=True)
     except BadNumber:
-        flash("Payment amount must be a valid number.", "error")
+        flash(_("Payment amount must be a valid number."), "error")
         return redisplay()
     if amount <= 0:
-        flash("Payment amount must be greater than zero.", "error")
+        flash(_("Payment amount must be greater than zero."), "error")
         return redisplay()
     paid_so_far = db.execute(
         "SELECT COALESCE(SUM(amount),0) s FROM distributor_bill_payments WHERE bill_id=?", (bill_id,)
@@ -286,7 +287,7 @@ def distributor_payment_new(dist_id, bill_id):
     # badge next to a negative balance with nothing indicating an
     # overpayment/credit happened.
     if amount > balance + 1e-9:
-        flash(f"That's more than the remaining balance of {logic.fmt_money(balance)} IQD on this bill.", "error")
+        flash(_("That's more than the remaining balance of %(fmt_money)s IQD on this bill.", fmt_money=logic.fmt_money(balance)), "error")
         return redisplay()
     try:
         payment_date = clean_date(f.get("payment_date"), field="payment_date") or date.today().isoformat()
@@ -302,7 +303,7 @@ def distributor_payment_new(dist_id, bill_id):
     pid = cur.fetchone()["id"]
     auth.log_change(db, "distributor_bill_payments", str(pid), "create")
     db.commit()
-    flash("Payment recorded.", "success")
+    flash(_("Payment recorded."), "success")
     return redirect(url_for("consignment.distributor_detail", dist_id=dist_id))
 
 
@@ -316,12 +317,12 @@ def distributor_payment_delete(dist_id, payment_id):
         (payment_id, dist_id),
     ).fetchone()
     if not owned:
-        flash("Payment not found.", "error")
+        flash(_("Payment not found."), "error")
         return redirect(url_for("consignment.distributor_detail", dist_id=dist_id))
     db.execute("DELETE FROM distributor_bill_payments WHERE id=?", (payment_id,))
     auth.log_change(db, "distributor_bill_payments", str(payment_id), "delete")
     db.commit()
-    flash("Payment deleted.", "success")
+    flash(_("Payment deleted."), "success")
     return redirect(url_for("consignment.distributor_detail", dist_id=dist_id))
 
 
@@ -502,19 +503,19 @@ def consignment_receiving_new():
     item_id = f.get("item_id")
     item = db.execute("SELECT * FROM inventory_list WHERE id=? AND ownership_type='Consignment'", (item_id,)).fetchone()
     if not item:
-        flash("Pick a Consignment item first.", "error")
+        flash(_("Pick a Consignment item first."), "error")
         return redisplay()
     try:
         quantity = parse_money(f.get("quantity"), required=True)
         unit_cost = parse_money(f.get("unit_cost"), required=True)
     except BadNumber:
-        flash("Quantity and Unit Cost must be valid numbers.", "error")
+        flash(_("Quantity and Unit Cost must be valid numbers."), "error")
         return redisplay()
     if quantity <= 0:
-        flash("Quantity must be greater than 0.", "error")
+        flash(_("Quantity must be greater than 0."), "error")
         return redisplay()
     if has_negative(unit_cost):
-        flash("Unit Cost can't be negative.", "error")
+        flash(_("Unit Cost can't be negative."), "error")
         return redisplay()
     try:
         received_date = clean_date(f.get("received_date"), field="received_date") or date.today().isoformat()
@@ -525,7 +526,7 @@ def consignment_receiving_new():
                                       received_date, f.get("delivery_reference"), f.get("notes"), session["user_id"])
     auth.log_change(db, "consignment_receipts", item_id, "create")
     db.commit()
-    flash(f"Received {quantity:g} {item['name']}.", "success")
+    flash(_("Received %(quantity)s %(name)s.", quantity=f"{quantity:g}", name=item['name']), "success")
     return redirect(url_for("consignment.consignment_receiving_page"))
 
 
@@ -560,19 +561,19 @@ def consignment_shrinkage_new():
     item_id = f.get("item_id")
     item = db.execute("SELECT * FROM inventory_list WHERE id=? AND ownership_type='Consignment'", (item_id,)).fetchone()
     if not item:
-        flash("Pick a Consignment item first.", "error")
+        flash(_("Pick a Consignment item first."), "error")
         return redisplay()
     try:
         quantity = parse_money(f.get("quantity"), required=True)
     except BadNumber:
-        flash("Quantity must be a valid number.", "error")
+        flash(_("Quantity must be a valid number."), "error")
         return redisplay()
     if quantity <= 0:
-        flash("Quantity must be greater than 0.", "error")
+        flash(_("Quantity must be greater than 0."), "error")
         return redisplay()
     reason = f.get("reason")
     if reason not in ("Damaged", "Expired", "Other"):
-        flash("Reason must be Damaged, Expired, or Other.", "error")
+        flash(_("Reason must be Damaged, Expired, or Other."), "error")
         return redisplay()
     # Default liability by reason (§9): Expired defaults to Distributor
     # (bad stock rotation on their end), Damaged/Other default to Clinic
@@ -580,10 +581,10 @@ def consignment_shrinkage_new():
     default_liable = "Distributor" if reason == "Expired" else "Clinic"
     liable_party = f.get("liable_party") or default_liable
     if liable_party not in ("Distributor", "Clinic"):
-        flash("Liable Party must be Distributor or Clinic.", "error")
+        flash(_("Liable Party must be Distributor or Clinic."), "error")
         return redisplay()
     overridden = liable_party != default_liable
-    ok, _, error = logic.record_consignment_shrinkage(
+    ok, _unused, error = logic.record_consignment_shrinkage(
         db, item_id, item["distributor_id"], quantity, reason, liable_party, overridden,
         f.get("notes"), session["user_id"],
     )
@@ -592,7 +593,7 @@ def consignment_shrinkage_new():
         return redisplay()
     auth.log_change(db, "consignment_shrinkage", item_id, "create")
     db.commit()
-    flash(f"Logged {quantity:g} {item['name']} as shrinkage ({liable_party} liable).", "success")
+    flash(_("Logged %(quantity)s %(name)s as shrinkage (%(liable_party)s liable).", quantity=f"{quantity:g}", name=item['name'], liable_party=liable_party), "success")
     return redirect(url_for("consignment.consignment_shrinkage_page"))
 
 
@@ -627,22 +628,22 @@ def consignment_returns_new():
     item_id = f.get("item_id")
     item = db.execute("SELECT * FROM inventory_list WHERE id=? AND ownership_type='Consignment'", (item_id,)).fetchone()
     if not item:
-        flash("Pick a Consignment item first.", "error")
+        flash(_("Pick a Consignment item first."), "error")
         return redisplay()
     try:
         quantity = parse_money(f.get("quantity"), required=True)
     except BadNumber:
-        flash("Quantity must be a valid number.", "error")
+        flash(_("Quantity must be a valid number."), "error")
         return redisplay()
     if quantity <= 0:
-        flash("Quantity must be greater than 0.", "error")
+        flash(_("Quantity must be greater than 0."), "error")
         return redisplay()
     try:
         return_date = clean_date(f.get("return_date"), field="return_date") or date.today().isoformat()
     except BadDate as e:
         flash(str(e), "error")
         return redisplay()
-    ok, _, error = logic.record_consignment_return(
+    ok, _unused, error = logic.record_consignment_return(
         db, item_id, item["distributor_id"], quantity, return_date, f.get("reason"), f.get("notes"), session["user_id"],
     )
     if not ok:
@@ -650,7 +651,7 @@ def consignment_returns_new():
         return redisplay()
     auth.log_change(db, "consignment_returns", item_id, "create")
     db.commit()
-    flash(f"Returned {quantity:g} {item['name']} to {item['distributor_id']}.", "success")
+    flash(_("Returned %(quantity)s %(name)s to %(distributor_id)s.", quantity=f"{quantity:g}", name=item['name'], distributor_id=item['distributor_id']), "success")
     return redirect(url_for("consignment.consignment_returns_page"))
 
 
@@ -671,7 +672,7 @@ def consignment_sales_page():
                 if logic.parse_date(value) is None:
                     raise ValueError(value)
             except ValueError:
-                flash("That date wasn't valid — showing all dates instead.", "error")
+                flash(_("That date wasn't valid — showing all dates instead."), "error")
                 if label == "date_from":
                     date_from = None
                 else:
@@ -697,7 +698,7 @@ def consignment_settlements_page(distributor_id):
     db = get_db()
     distributor = db.execute("SELECT * FROM distributors WHERE id=?", (distributor_id,)).fetchone()
     if not distributor:
-        flash("Distributor not found.", "error")
+        flash(_("Distributor not found."), "error")
         return redirect(url_for("consignment.consignment_overview"))
     balance = logic.consignment_balance(db, distributor_id)
     history = db.execute(
@@ -738,7 +739,7 @@ def consignment_settlement_new(distributor_id):
     # record_consignment_return() already use on inventory_list rows.
     distributor = db.execute("SELECT * FROM distributors WHERE id=? FOR UPDATE", (distributor_id,)).fetchone()
     if not distributor:
-        flash("Distributor not found.", "error")
+        flash(_("Distributor not found."), "error")
         return redirect(url_for("consignment.consignment_overview"))
     # Recomputed fresh at submit time, not trusted from a hidden form
     # field — the balance is a live figure (more could have sold since
@@ -748,10 +749,10 @@ def consignment_settlement_new(distributor_id):
     try:
         amount_paid = parse_money(request.form.get("amount_paid"), required=True)
     except BadNumber:
-        flash("Amount Paid must be a valid number.", "error")
+        flash(_("Amount Paid must be a valid number."), "error")
         return redisplay()
     if amount_paid < 0:
-        flash("Amount Paid can't be negative.", "error")
+        flash(_("Amount Paid can't be negative."), "error")
         return redisplay()
     # Nothing to settle: either this distributor has had no consignment
     # activity at all (in which case balance["period_start"] is None and the
@@ -760,10 +761,10 @@ def consignment_settlement_new(distributor_id):
     # settled and this would record a no-op row. Both are refused here rather
     # than reaching the database.
     if balance["period_start"] is None or balance["amount_owed"] <= 0:
-        flash("There's nothing to settle for this distributor yet.", "error")
+        flash(_("There's nothing to settle for this distributor yet."), "error")
         return redisplay()
     if amount_paid > balance["amount_owed"] + 1e-9:
-        flash(f"That's more than the {logic.fmt_money(balance['amount_owed'])} IQD owed for this period.", "error")
+        flash(_("That's more than the %(fmt_money)s IQD owed for this period.", fmt_money=logic.fmt_money(balance['amount_owed'])), "error")
         return redisplay()
     amount_paid = money.round_to_denomination(amount_paid)
     cur = db.execute(
@@ -778,10 +779,9 @@ def consignment_settlement_new(distributor_id):
     db.commit()
     residual = round(balance["amount_owed"] - amount_paid, 2)
     if residual > 0:
-        flash(f"Settlement recorded: {logic.fmt_money(amount_paid)} IQD paid of "
-              f"{logic.fmt_money(balance['amount_owed'])} IQD owed — {logic.fmt_money(residual)} IQD carries forward.", "success")
+        flash(_("Settlement recorded: %(fmt_money)s IQD paid of %(fmt_money2)s IQD owed — %(fmt_money3)s IQD carries forward.", fmt_money=logic.fmt_money(amount_paid), fmt_money2=logic.fmt_money(balance['amount_owed']), fmt_money3=logic.fmt_money(residual)), "success")
     else:
-        flash(f"Settlement recorded: {logic.fmt_money(amount_paid)} IQD paid, settled in full.", "success")
+        flash(_("Settlement recorded: %(fmt_money)s IQD paid, settled in full.", fmt_money=logic.fmt_money(amount_paid)), "success")
     return redirect(url_for("consignment.consignment_settlements_page", distributor_id=distributor_id))
 
 
@@ -791,7 +791,7 @@ def consignment_settlement_export(settlement_id):
     db = get_db()
     settlement = db.execute("SELECT id FROM consignment_settlements WHERE id=?", (settlement_id,)).fetchone()
     if not settlement:
-        flash("Settlement not found.", "error")
+        flash(_("Settlement not found."), "error")
         return redirect(url_for("consignment.consignment_overview"))
     buf = pdf_export.export_consignment_settlement_pdf(db, settlement_id)
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"settlement_{settlement_id}.pdf")
