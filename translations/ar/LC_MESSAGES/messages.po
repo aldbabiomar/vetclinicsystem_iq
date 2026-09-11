@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-09-11 21:02+0300\n"
+"POT-Creation-Date: 2026-09-11 21:52+0300\n"
 "PO-Revision-Date: 2026-09-11 12:18+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ar\n"
@@ -19,7 +19,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: app.py:634
+#: app.py:622
 msgid ""
 "You were signed out before that could be saved, so nothing was stored. "
 "Please sign in and enter it again."
@@ -27,12 +27,12 @@ msgstr ""
 "تم تسجيل خروجك قبل أن يُحفظ ذلك، فلم يُخزَّن شيء. يرجى تسجيل الدخول "
 "وإدخاله مرة أخرى."
 
-#: app.py:746
+#: app.py:734
 #, python-format
 msgid "That file is too large — the limit is %(MAX_UPLOAD_MB)s MB per upload."
 msgstr "الملف كبير جدًا — الحد الأقصى %(MAX_UPLOAD_MB)s ميجابايت لكل رفع."
 
-#: app.py:773
+#: app.py:761
 msgid ""
 "One of the number fields on that form wasn't valid. Please check the "
 "amounts and try again."
@@ -40,11 +40,11 @@ msgstr ""
 "أحد الحقول الرقمية في ذلك النموذج غير صالح. يرجى التحقق من المبالغ "
 "والمحاولة مرة أخرى."
 
-#: app.py:781
+#: app.py:769
 msgid "That phone number doesn't look valid. Please check it and try again."
 msgstr "رقم الهاتف لا يبدو صحيحًا. يرجى التحقق منه والمحاولة مرة أخرى."
 
-#: app.py:817
+#: app.py:805
 msgid ""
 "This page had been open too long to submit safely, so nothing was saved. "
 "Please check what you entered and submit it again."
@@ -52,7 +52,7 @@ msgstr ""
 "بقيت هذه الصفحة مفتوحة مدة أطول من أن تُرسَل بأمان، فلم يُحفظ شيء. يرجى "
 "مراجعة ما أدخلته وإرساله مرة أخرى."
 
-#: app.py:820
+#: app.py:808
 msgid ""
 "You were signed out while this page was open. Please sign in again — you "
 "may need to re-enter what you were working on."
@@ -60,7 +60,7 @@ msgstr ""
 "تم تسجيل خروجك بينما كانت هذه الصفحة مفتوحة. يرجى تسجيل الدخول مرة أخرى —"
 " قد تحتاج إلى إعادة إدخال ما كنت تعمل عليه."
 
-#: app.py:824
+#: app.py:812
 msgid ""
 "That form was missing something the server needed. Please reload the page"
 " and try again."
@@ -68,11 +68,11 @@ msgstr ""
 "النموذج ينقصه شيء يحتاجه الخادم. يرجى إعادة تحميل الصفحة والمحاولة مرة "
 "أخرى."
 
-#: app.py:837
+#: app.py:825
 msgid "That number is too large to be a valid value here."
 msgstr "هذا الرقم كبير جدًا ليكون قيمة صالحة هنا."
 
-#: app.py:953
+#: app.py:941
 msgid ""
 "Too many login attempts from this network. Please wait a few minutes and "
 "try again."
@@ -80,7 +80,7 @@ msgstr ""
 "محاولات تسجيل دخول كثيرة من هذه الشبكة. يرجى الانتظار بضع دقائق دون "
 "محاولة، ثم إعادة المحاولة."
 
-#: app.py:960
+#: app.py:948
 #, python-format
 msgid ""
 "Too many failed attempts for that account. Try again in about "
@@ -89,39 +89,39 @@ msgstr ""
 "محاولات فاشلة كثيرة على هذا الحساب. حاول مرة أخرى بعد نحو "
 "%(minutes_left)s دقيقة (حوالي %(strftime)s)."
 
-#: app.py:972
+#: app.py:960
 msgid "Incorrect username or password, or account is disabled."
 msgstr "اسم المستخدم أو كلمة المرور غير صحيحة، أو أن الحساب معطّل."
 
-#: app.py:1010
+#: app.py:998
 msgid "Current password is incorrect."
 msgstr "كلمة المرور الحالية غير صحيحة."
 
-#: app.py:1014
+#: app.py:1002
 msgid "New password and confirmation don't match."
 msgstr "كلمة المرور الجديدة والتأكيد غير متطابقين."
 
-#: app.py:1025
+#: app.py:1013
 msgid "Password updated."
 msgstr "تم تحديث كلمة المرور."
 
-#: app.py:1340
+#: app.py:1328
 msgid "Pick a month first."
 msgstr "اختر الشهر أولًا."
 
-#: app.py:1343
+#: app.py:1331
 msgid "That's not a valid month."
 msgstr "هذا ليس شهرًا صالحًا."
 
-#: app.py:1352
+#: app.py:1340
 msgid "Operating costs must be valid numbers."
 msgstr "يجب أن تكون التكاليف التشغيلية أرقامًا صالحة."
 
-#: app.py:1360
+#: app.py:1348
 msgid "Operating costs can't be negative."
 msgstr "لا يمكن أن تكون التكاليف التشغيلية سالبة."
 
-#: app.py:1370
+#: app.py:1358
 #, python-format
 msgid "Operating costs saved for %(month)s."
 msgstr "تم حفظ التكاليف التشغيلية لشهر %(month)s."
@@ -167,7 +167,7 @@ msgstr "جارية"
 
 #: enum_labels.py:39
 msgid "Admitted to Inpatient"
-msgstr "محوّل إلى التنويم"
+msgstr "محوّل إلى الإقامة المرضية"
 
 #: enum_labels.py:40
 msgid "Deceased/Euthanized"
@@ -299,19 +299,19 @@ msgstr "تجزئة"
 msgid "Medical"
 msgstr "طبي"
 
-#: enum_labels.py:66 templates/base.html:77 templates/boarding.html:2
+#: enum_labels.py:66 templates/base.html:70 templates/boarding.html:2
 #: templates/boarding.html:5
 msgid "Boarding"
-msgstr "الإيواء"
+msgstr "الإقامة الفندقية"
 
 #: enum_labels.py:72
 msgid "Outpatient"
 msgstr "عيادات خارجية"
 
-#: enum_labels.py:72 enum_labels.py:135 templates/base.html:83
+#: enum_labels.py:72 enum_labels.py:135 templates/base.html:76
 #: templates/inpatient_detail.html:2
 msgid "Inpatient"
-msgstr "التنويم"
+msgstr "الإقامة المرضية"
 
 #: enum_labels.py:74
 msgid "Pending"
@@ -414,7 +414,7 @@ msgstr "مدفوع"
 msgid "Owned"
 msgstr "مملوك"
 
-#: enum_labels.py:95 enum_labels.py:136 templates/base.html:109
+#: enum_labels.py:95 enum_labels.py:136 templates/base.html:102
 #: templates/consignment_overview.html:2 templates/consignment_overview.html:6
 msgid "Consignment"
 msgstr "الأمانة"
@@ -467,7 +467,7 @@ msgid "Perfect"
 msgstr "مطابق"
 
 #: enum_labels.py:104 enum_labels.py:153 templates/appointments.html:34
-#: templates/appointments.html:102 templates/base.html:76
+#: templates/appointments.html:102 templates/base.html:69
 #: templates/grooming_list.html:2 templates/visit_detail.html:84
 #: templates/visits_list.html:36
 msgid "Grooming"
@@ -533,7 +533,7 @@ msgstr "ليلي"
 msgid "Shutdown"
 msgstr "عند الإغلاق"
 
-#: enum_labels.py:119 enum_labels.py:136 templates/base.html:153
+#: enum_labels.py:119 enum_labels.py:136 templates/base.html:146
 msgid "Admin"
 msgstr "الإدارة"
 
@@ -555,7 +555,7 @@ msgstr ""
 
 #: enum_labels.py:123
 msgid "Clinical staff — patient care, visits, and inpatient cases."
-msgstr "الطاقم السريري — رعاية الحيوانات والزيارات وحالات التنويم."
+msgstr "الطاقم السريري — رعاية الحيوانات والزيارات وحالات الإقامة المرضية."
 
 #: enum_labels.py:124
 msgid "Front desk — scheduling, checkout, and client-facing tasks."
@@ -571,11 +571,11 @@ msgstr "دفعة زيارة"
 
 #: enum_labels.py:128
 msgid "Inpatient Payment"
-msgstr "دفعة تنويم"
+msgstr "دفعة إقامة مرضية"
 
 #: enum_labels.py:128
 msgid "Boarding Payment"
-msgstr "دفعة إيواء"
+msgstr "دفعة إقامة فندقية"
 
 #: enum_labels.py:129 templates/refunds.html:8
 msgid "Retail Refund"
@@ -595,15 +595,15 @@ msgstr "صرف من الصندوق"
 msgid "Payment"
 msgstr "دفعة"
 
-#: enum_labels.py:135 templates/base.html:70
+#: enum_labels.py:135 templates/base.html:63
 msgid "Patients & Visits"
 msgstr "المرضى والزيارات"
 
-#: enum_labels.py:135 templates/base.html:92
+#: enum_labels.py:135 templates/base.html:85
 msgid "Inventory"
 msgstr "المخزون"
 
-#: enum_labels.py:135 templates/base.html:128
+#: enum_labels.py:135 templates/base.html:121
 msgid "Sales & Billing"
 msgstr "المبيعات والفوترة"
 
@@ -633,7 +633,7 @@ msgstr "إدارة العناية والتصفيف"
 
 #: enum_labels.py:141
 msgid "Manage Boarding"
-msgstr "إدارة الإيواء"
+msgstr "إدارة الإقامة الفندقية"
 
 #: enum_labels.py:141
 msgid "Manage Appointments"
@@ -641,7 +641,7 @@ msgstr "إدارة المواعيد"
 
 #: enum_labels.py:141
 msgid "Manage Inpatient Cases"
-msgstr "إدارة حالات التنويم"
+msgstr "إدارة حالات الإقامة المرضية"
 
 #: enum_labels.py:142
 msgid "View Inventory Status"
@@ -677,7 +677,7 @@ msgstr "إدارة قائمة الأسعار"
 
 #: enum_labels.py:144
 msgid "Manage Refunds"
-msgstr "إدارة المرتجعات"
+msgstr "إدارة المرتجعات النقدية"
 
 #: enum_labels.py:145
 msgid "Manage Cash Register"
@@ -888,8 +888,8 @@ msgid ""
 " at least one role has this turned on."
 msgstr ""
 "لا يوجد دور محدد حاليًا بخيار \"يمكن إسناده كطبيب بيطري\" — لن تُظهر "
-"قوائم اختيار الطبيب في المواعيد والزيارة الجديدة والعناية والتنويم أي "
-"خيارات حتى يتم تفعيله لدور واحد على الأقل."
+"قوائم اختيار الطبيب في المواعيد والزيارة الجديدة والعناية والإقامة "
+"المرضية أي خيارات حتى يتم تفعيله لدور واحد على الأقل."
 
 #: routes/admin.py:278
 msgid "The Admin role can't be edited."
@@ -1001,7 +1001,7 @@ msgstr "الزيارة غير موجودة."
 
 #: routes/clinical.py:776
 msgid "Visit type must be Outpatient or Inpatient."
-msgstr "يجب أن يكون نوع الزيارة عيادات خارجية أو تنويم."
+msgstr "يجب أن يكون نوع الزيارة عيادات خارجية أو إقامة مرضية."
 
 #: routes/clinical.py:795 routes/clinical.py:1756 routes/clinical.py:1840
 msgid "Weight can't be negative."
@@ -1013,12 +1013,12 @@ msgid ""
 "Inpatient case #%(id)s is still open for this visit — dismiss it there "
 "first, or leave the status as Admitted to Inpatient."
 msgstr ""
-"حالة التنويم رقم %(id)s ما زالت مفتوحة لهذه الزيارة — أغلقها من هناك "
-"أولًا، أو اترك الحالة كما هي: محوّل إلى التنويم."
+"حالة الإقامة المرضية رقم %(id)s ما زالت مفتوحة لهذه الزيارة — أغلقها من "
+"هناك أولًا، أو اترك الحالة كما هي: محوّل إلى الإقامة المرضية."
 
 #: routes/clinical.py:854
 msgid "An inpatient case was opened for this visit."
-msgstr "تم فتح حالة تنويم لهذه الزيارة."
+msgstr "تم فتح حالة إقامة مرضية لهذه الزيارة."
 
 #: routes/clinical.py:856
 msgid "Visit updated."
@@ -1168,12 +1168,12 @@ msgstr "لا يمكن أن يكون السعر اليومي والإجمالي �
 
 #: routes/clinical.py:1446
 msgid "Boarding session added."
-msgstr "تمت إضافة فترة الإيواء."
+msgstr "تمت إضافة فترة الإقامة الفندقية."
 
 #: routes/clinical.py:1457 routes/clinical.py:1534 routes/clinical.py:1568
 #: routes/clinical.py:1606
 msgid "Boarding session not found."
-msgstr "فترة الإيواء غير موجودة."
+msgstr "فترة الإقامة الفندقية غير موجودة."
 
 #: routes/clinical.py:1488
 msgid "A stay can't end before it starts — check the dates."
@@ -1181,7 +1181,7 @@ msgstr "لا يمكن أن تنتهي الإقامة قبل أن تبدأ — ت
 
 #: routes/clinical.py:1518
 msgid "Boarding session updated."
-msgstr "تم تحديث فترة الإيواء."
+msgstr "تم تحديث فترة الإقامة الفندقية."
 
 #: routes/clinical.py:1520
 msgid ""
@@ -1212,17 +1212,17 @@ msgstr "هذا أكثر من الرصيد المتبقي البالغ %(fmt_mone
 
 #: routes/clinical.py:1776
 msgid "Patient admitted."
-msgstr "تم تنويم المريض."
+msgstr "تم إدخال المريض."
 
 #: routes/clinical.py:1808 routes/clinical.py:1822 routes/clinical.py:1922
 #: routes/clinical.py:2020 routes/clinical.py:2038 routes/clinical.py:2068
 #: routes/clinical.py:2075 routes/clinical.py:2130
 msgid "Inpatient case not found."
-msgstr "حالة التنويم غير موجودة."
+msgstr "حالة الإقامة المرضية غير موجودة."
 
 #: routes/clinical.py:1850
 msgid "A case can't be discharged before it was admitted — check the dates."
-msgstr "لا يمكن إخراج الحالة قبل تاريخ تنويمها — تحقق من التواريخ."
+msgstr "لا يمكن إخراج الحالة قبل تاريخ إدخالها — تحقق من التواريخ."
 
 #: routes/clinical.py:1867
 msgid "Case updated."
@@ -1697,8 +1697,8 @@ msgid ""
 "A service refund must be linked to exactly one visit, inpatient case, or "
 "boarding stay."
 msgstr ""
-"يجب ربط استرداد الخدمة بزيارة واحدة فقط، أو حالة تنويم واحدة، أو إقامة "
-"إيواء واحدة."
+"يجب ربط استرداد الخدمة بزيارة واحدة فقط، أو حالة إقامة مرضية واحدة، أو "
+"إقامة فندقية واحدة."
 
 #: routes/sales.py:628
 #, python-format
@@ -1708,12 +1708,12 @@ msgstr "الزيارة %(visit_id)s غير موجودة."
 #: routes/sales.py:636
 #, python-format
 msgid "Inpatient case %(case_id_raw)s not found."
-msgstr "حالة التنويم %(case_id_raw)s غير موجودة."
+msgstr "حالة الإقامة المرضية %(case_id_raw)s غير موجودة."
 
 #: routes/sales.py:645
 #, python-format
 msgid "Boarding stay %(boarding_id_raw)s not found."
-msgstr "إقامة الإيواء %(boarding_id_raw)s غير موجودة."
+msgstr "الإقامة الفندقية %(boarding_id_raw)s غير موجودة."
 
 #: routes/sales.py:669
 #, python-format
@@ -1786,19 +1786,22 @@ msgid "Not a valid color palette."
 msgstr "لوحة الألوان غير صالحة."
 
 #: routes/settings.py:232
+msgid "Not a valid language."
+msgstr "ليست لغة صالحة."
+#: routes/settings.py:243
 #, python-format
 msgid "%(title)s must be a valid time (HH:MM)."
 msgstr "يجب أن يكون %(title)s وقتًا صالحًا (ساعة:دقيقة)."
 
-#: routes/settings.py:238
+#: routes/settings.py:249
 msgid "Day Ends At must be after Day Starts At."
 msgstr "يجب أن يكون وقت نهاية اليوم بعد وقت بدايته."
 
-#: routes/settings.py:248
+#: routes/settings.py:259
 msgid "The monitoring ping URL must start with https://"
 msgstr "يجب أن يبدأ رابط المراقبة بـ https://"
 
-#: routes/settings.py:301
+#: routes/settings.py:312
 msgid "Settings saved."
 msgstr "تم حفظ الإعدادات."
 
@@ -1867,7 +1870,7 @@ msgstr "درجة الحالة الجسدية (١–٩)"
 
 #: templates/_visit_fields.html:20
 msgid "Admit as Inpatient Now"
-msgstr "تنويم المريض الآن"
+msgstr "إدخال المريض للإقامة المرضية الآن"
 
 #: templates/_visit_fields.html:27
 msgid "Wellness Visit?"
@@ -1914,7 +1917,7 @@ msgid "Admitted Items (Leash, Carrier, Etc.)"
 msgstr "الأغراض المستلمة (رباط، قفص، إلخ)"
 
 #: templates/admin_logs.html:2 templates/admin_logs.html:6
-#: templates/base.html:158
+#: templates/base.html:151
 msgid "Logins and Changes"
 msgstr "سجل الدخول والتغييرات"
 
@@ -1995,8 +1998,8 @@ msgstr "عنوان الشبكة"
 msgid "Device"
 msgstr "الجهاز"
 
-#: templates/admin_logs.html:44 templates/settings.html:133
-#: templates/settings.html:179
+#: templates/admin_logs.html:44 templates/settings.html:139
+#: templates/settings.html:185
 msgid "Success"
 msgstr "نجح"
 
@@ -2009,7 +2012,7 @@ msgid "No login activity on this date."
 msgstr "لا يوجد نشاط تسجيل دخول في هذا التاريخ."
 
 #: templates/admin_users.html:2 templates/admin_users.html:6
-#: templates/base.html:157
+#: templates/base.html:150
 msgid "Users & Roles"
 msgstr "المستخدمون والصلاحيات"
 
@@ -2052,8 +2055,8 @@ msgstr "حد الخصم"
 #: templates/followups_list.html:15 templates/grooming_list.html:14
 #: templates/inpatient_list.html:16 templates/insights.html:149
 #: templates/patient_detail.html:33 templates/patient_detail.html:69
-#: templates/patient_detail.html:86 templates/settings.html:127
-#: templates/settings.html:173 templates/visit_detail.html:66
+#: templates/patient_detail.html:86 templates/settings.html:133
+#: templates/settings.html:179 templates/visit_detail.html:66
 #: templates/visit_detail.html:87 templates/visit_form_edit.html:51
 #: templates/visits_list.html:13 templates/visits_list.html:31
 msgid "Status"
@@ -2132,7 +2135,7 @@ msgid ""
 "Visits, Grooming, and Inpatient"
 msgstr ""
 "ما إذا كان الموظفون بهذا الدور يظهرون كأطباء يمكن إسنادهم في المواعيد "
-"والزيارات والعناية والتنويم"
+"والزيارات والعناية والإقامة المرضية"
 
 #: templates/admin_users.html:87 templates/admin_users.html:113
 #: templates/admin_users.html:196
@@ -2181,7 +2184,7 @@ msgstr "تغييرات غير محفوظة"
 #: templates/distributors.html:63 templates/inpatient_new.html:36
 #: templates/inventory_catalog.html:51 templates/inventory_catalog.html:162
 #: templates/owner_form.html:17 templates/patient_form_edit.html:29
-#: templates/price_list.html:52 templates/settings.html:384
+#: templates/price_list.html:52 templates/settings.html:390
 #: templates/visit_form_edit.html:62 templates/visit_new_existing.html:24
 #: templates/visit_new_patient.html:36
 msgid "Cancel"
@@ -2307,7 +2310,7 @@ msgid "Moving & deleting…"
 msgstr "جارٍ النقل والحذف…"
 
 #: templates/appointments.html:2 templates/appointments.html:5
-#: templates/base.html:78 templates/settings.html:31
+#: templates/base.html:71 templates/settings.html:37
 msgid "Appointments"
 msgstr "المواعيد"
 
@@ -2603,7 +2606,7 @@ msgid "{zero} item(s) are counted as 0 in stock — please double-check these."
 msgstr "{zero} صنفًا معدود بمخزون صفر — يرجى التأكد منها مرة أخرى."
 
 #: templates/audit_sessions_list.html:2 templates/audit_sessions_list.html:5
-#: templates/base.html:98
+#: templates/base.html:91
 msgid "Audit History"
 msgstr "سجل الجرد"
 
@@ -2689,157 +2692,153 @@ msgstr "إغلاق القائمة"
 msgid "Toggle dark mode"
 msgstr "تبديل الوضع الداكن"
 
-#: templates/base.html:57 templates/base.html:58
-msgid "Switch language"
-msgstr "تغيير اللغة"
-
-#: templates/base.html:65 templates/dashboard.html:2 templates/dashboard.html:6
+#: templates/base.html:58 templates/dashboard.html:2 templates/dashboard.html:6
 msgid "Dashboard"
 msgstr "لوحة التحكم"
 
-#: templates/base.html:71 templates/owners_list.html:2
+#: templates/base.html:64 templates/owners_list.html:2
 #: templates/owners_list.html:5
 msgid "Owners"
 msgstr "الملاك"
 
-#: templates/base.html:72 templates/owners_list.html:16
+#: templates/base.html:65 templates/owners_list.html:16
 #: templates/patients_list.html:2 templates/patients_list.html:5
 msgid "Patients"
 msgstr "المرضى"
 
-#: templates/base.html:73 templates/insights.html:64
+#: templates/base.html:66 templates/insights.html:64
 #: templates/visits_list.html:2 templates/visits_list.html:5
 msgid "Visits"
 msgstr "الزيارات"
 
-#: templates/base.html:74 templates/followups_list.html:2
+#: templates/base.html:67 templates/followups_list.html:2
 #: templates/followups_list.html:5
 msgid "Follow-Ups"
 msgstr "المتابعات"
 
-#: templates/base.html:75 templates/wellness_list.html:2
+#: templates/base.html:68 templates/wellness_list.html:2
 msgid "Wellness"
 msgstr "الرعاية الوقائية"
 
-#: templates/base.html:84 templates/inpatient_list.html:2
+#: templates/base.html:77 templates/inpatient_list.html:2
 #: templates/inpatient_list.html:5
 msgid "Inpatient Cases"
-msgstr "حالات التنويم"
+msgstr "حالات الإقامة المرضية"
 
-#: templates/base.html:96 templates/inventory_status.html:2
+#: templates/base.html:89 templates/inventory_status.html:2
 #: templates/inventory_status.html:6
 msgid "Inventory Status"
 msgstr "حالة المخزون"
 
-#: templates/base.html:97 templates/ordering_sheet.html:2
+#: templates/base.html:90 templates/ordering_sheet.html:2
 #: templates/ordering_sheet.html:6
 msgid "Ordering Sheet"
 msgstr "كشف الطلبات"
 
-#: templates/base.html:99 templates/inventory_catalog.html:2
+#: templates/base.html:92 templates/inventory_catalog.html:2
 #: templates/inventory_catalog.html:6
 msgid "Inventory Catalog"
 msgstr "دليل الأصناف"
 
-#: templates/base.html:100 templates/distributors.html:2
+#: templates/base.html:93 templates/distributors.html:2
 #: templates/distributors.html:6
 msgid "Distributors"
 msgstr "الموردون"
 
-#: templates/base.html:113
+#: templates/base.html:106
 msgid "Overview"
 msgstr "نظرة عامة"
 
-#: templates/base.html:114
+#: templates/base.html:107
 msgid "Items"
 msgstr "الأصناف"
 
-#: templates/base.html:115
+#: templates/base.html:108
 msgid "Receiving"
 msgstr "الاستلام"
 
-#: templates/base.html:116
+#: templates/base.html:109
 msgid "Shrinkage"
 msgstr "الهالك"
 
-#: templates/base.html:117
+#: templates/base.html:110
 msgid "Returns"
 msgstr "المرتجعات إلى المورد"
 
-#: templates/base.html:118 templates/consignment_sales.html:6
+#: templates/base.html:111 templates/consignment_sales.html:6
 msgid "Sales by Distributor"
 msgstr "المبيعات حسب المورد"
 
-#: templates/base.html:119
+#: templates/base.html:112
 msgid "Settlements"
 msgstr "التسويات"
 
-#: templates/base.html:132 templates/pos.html:2 templates/pos.html:4
+#: templates/base.html:125 templates/pos.html:2 templates/pos.html:4
 msgid "Point of Sale"
 msgstr "نقطة البيع"
 
-#: templates/base.html:133 templates/pos_history.html:2
+#: templates/base.html:126 templates/pos_history.html:2
 #: templates/pos_history.html:6
 msgid "Sales History"
 msgstr "سجل المبيعات"
 
-#: templates/base.html:134 templates/price_list.html:2
+#: templates/base.html:127 templates/price_list.html:2
 #: templates/price_list.html:5
 msgid "Price List"
 msgstr "قائمة الأسعار"
 
-#: templates/base.html:135 templates/refunds.html:2 templates/refunds.html:4
+#: templates/base.html:128 templates/refunds.html:2 templates/refunds.html:4
 msgid "Refunds"
-msgstr "المرتجعات"
+msgstr "المرتجعات النقدية"
 
-#: templates/base.html:136 templates/cash_register.html:2
+#: templates/base.html:129 templates/cash_register.html:2
 #: templates/cash_register.html:6
 msgid "Cash Register"
 msgstr "الصندوق"
 
-#: templates/base.html:138 templates/reports.html:2 templates/reports.html:5
+#: templates/base.html:131 templates/reports.html:2 templates/reports.html:5
 msgid "Monthly P&L"
 msgstr "الأرباح والخسائر الشهرية"
 
-#: templates/base.html:139 templates/reports_yearly.html:2
+#: templates/base.html:132 templates/reports_yearly.html:2
 #: templates/reports_yearly.html:5
 msgid "Yearly P&L"
 msgstr "الأرباح والخسائر السنوية"
 
-#: templates/base.html:142 templates/insights.html:2 templates/insights.html:5
+#: templates/base.html:135 templates/insights.html:2 templates/insights.html:5
 msgid "Insights"
 msgstr "التحليلات"
 
-#: templates/base.html:143 templates/retention.html:2
+#: templates/base.html:136 templates/retention.html:2
 #: templates/retention.html:6
 msgid "Retention"
 msgstr "ولاء العملاء"
 
-#: templates/base.html:159 templates/settings.html:2 templates/settings.html:4
+#: templates/base.html:152 templates/settings.html:2 templates/settings.html:4
 msgid "Settings"
 msgstr "الإعدادات"
 
-#: templates/base.html:166
+#: templates/base.html:159
 msgid "Log Out"
 msgstr "تسجيل الخروج"
 
 #: templates/boarding.html:5
 #, python-format
 msgid "%(total_count)s boarding session(s)."
-msgstr "%(total_count)s جلسة إيواء."
+msgstr "%(total_count)s فترة إقامة فندقية."
 
 #: templates/boarding.html:5
 #, python-format
 msgid "%(total_count)s boarding session(s) currently boarding."
-msgstr "%(total_count)s جلسة إيواء جارية حاليًا."
+msgstr "%(total_count)s فترة إقامة فندقية جارية حاليًا."
 
 #: templates/boarding.html:6
 msgid "+ Add Boarding"
-msgstr "+ إضافة إيواء"
+msgstr "+ إضافة إقامة فندقية"
 
 #: templates/boarding.html:10
 msgid "Currently Boarding"
-msgstr "في الإيواء حاليًا"
+msgstr "في الإقامة الفندقية حاليًا"
 
 #: templates/boarding.html:11
 msgid "All (Incl. Picked Up)"
@@ -2909,7 +2908,7 @@ msgstr "صف الاحتياج الخاص…"
 
 #: templates/boarding.html:45
 msgid "Add Boarding"
-msgstr "إضافة إيواء"
+msgstr "إضافة إقامة فندقية"
 
 #: templates/boarding.html:53
 msgid "Something's Wrong"
@@ -3046,7 +3045,7 @@ msgstr "حفظ التغييرات"
 
 #: templates/boarding.html:169
 msgid "No boarding sessions on record."
-msgstr "لا توجد فترات إيواء مسجلة."
+msgstr "لا توجد فترات إقامة فندقية مسجلة."
 
 #: templates/boarding.html:183 templates/inpatient_new.html:49
 #: templates/visit_new_existing.html:37
@@ -3079,7 +3078,7 @@ msgstr ""
 
 #: templates/boarding.html:217
 msgid "Same-day boarding is billed as 1 night."
-msgstr "الإيواء في اليوم نفسه يُفوتر ليلة واحدة."
+msgstr "الإقامة الفندقية في اليوم نفسه تُفوتر ليلة واحدة."
 
 #: templates/cash_register.html:7
 #, python-format
@@ -3087,8 +3086,9 @@ msgid ""
 "Every POS sale, Visit/Inpatient/Boarding payment, and refund on %(day)s —"
 " for end-of-day cash-up against what's physically in the till."
 msgstr ""
-"كل عملية بيع في نقطة البيع، ودفعات الزيارات والتنويم والإيواء، والمرتجعات"
-" في %(day)s — لجرد نهاية اليوم مقابل الموجود فعليًا في الصندوق."
+"كل عملية بيع في نقطة البيع، ودفعات الزيارات والإقامة المرضية والإقامة "
+"الفندقية، والمرتجعات النقدية في %(day)s — لجرد نهاية اليوم مقابل الموجود "
+"فعليًا في الصندوق."
 
 #: templates/cash_register.html:13 templates/cash_register.html:90
 msgid "Pay From Cash Register"
@@ -4164,11 +4164,11 @@ msgstr "تم الإخراج"
 #: templates/inpatient_list.html:23 templates/patient_detail.html:33
 #: templates/patient_detail.html:38
 msgid "Admitted"
-msgstr "تم التنويم"
+msgstr "تم الإدخال"
 
 #: templates/inpatient_detail.html:10
 msgid "Export Inpatient (PDF)"
-msgstr "تصدير التنويم (PDF)"
+msgstr "تصدير الإقامة المرضية (PDF)"
 
 #: templates/inpatient_detail.html:14
 msgid "Info"
@@ -4353,13 +4353,14 @@ msgid ""
 " cases still owing money (e.g. a procedure billed after the patient "
 "already left). %(total_count)s shown."
 msgstr ""
-"الحيوانات المُدخلة حاليًا للإيواء أو لعلاج مستمر. استخدم \"كل الحالات\" "
-"لتضمين الحيوانات المخرَجة، أو \"رصيد مستحق\" للحالات المخرَجة التي ما زال"
-" عليها مبلغ (مثل إجراء فُوتر بعد خروج الحيوان). المعروض %(total_count)s."
+"الحيوانات المُدخلة حاليًا للإقامة الفندقية أو لعلاج مستمر. استخدم \"كل "
+"الحالات\" لتضمين الحيوانات المخرَجة، أو \"رصيد مستحق\" للحالات المخرَجة "
+"التي ما زال عليها مبلغ (مثل إجراء فُوتر بعد خروج الحيوان). المعروض "
+"%(total_count)s."
 
 #: templates/inpatient_list.html:6
 msgid "+ Admit Patient"
-msgstr "+ تنويم مريض"
+msgstr "+ إدخال مريض"
 
 #: templates/inpatient_list.html:10
 msgid "Currently Admitted"
@@ -4389,19 +4390,19 @@ msgstr "لا توجد حالات مخرَجة عليها رصيد مستحق."
 
 #: templates/inpatient_list.html:26
 msgid "No inpatient cases."
-msgstr "لا توجد حالات تنويم."
+msgstr "لا توجد حالات إقامة مرضية."
 
 #: templates/inpatient_new.html:2 templates/inpatient_new.html:5
 msgid "Admit Patient"
-msgstr "تنويم المريض"
+msgstr "إدخال المريض"
 
 #: templates/inpatient_new.html:21
 msgid "Admission Date"
-msgstr "تاريخ التنويم"
+msgstr "تاريخ الإدخال"
 
 #: templates/inpatient_new.html:35
 msgid "Admit"
-msgstr "تنويم"
+msgstr "إدخال"
 
 #: templates/insights.html:5
 #, python-format
@@ -4437,7 +4438,7 @@ msgstr "الإيرادات حسب فئة الخدمة"
 #: templates/insights.html:21
 #, python-format
 msgid "Net of refunds, per month, in %(currency_label)s."
-msgstr "صافي بعد المرتجعات، شهريًا، بـ %(currency_label)s."
+msgstr "صافي بعد المرتجعات النقدية، شهريًا، بـ %(currency_label)s."
 
 #: templates/insights.html:25
 msgid "Payment Method Mix"
@@ -4483,8 +4484,8 @@ msgid ""
 "From visit, inpatient & boarding payments (walk-in POS retail sales "
 "aren't linked to a client in this system)."
 msgstr ""
-"من دفعات الزيارات والتنويم والإيواء (مبيعات التجزئة المباشرة في نقطة "
-"البيع غير مرتبطة بعميل في هذا النظام)."
+"من دفعات الزيارات والإقامة المرضية والإقامة الفندقية (مبيعات التجزئة "
+"المباشرة في نقطة البيع غير مرتبطة بعميل في هذا النظام)."
 
 #: templates/insights.html:86
 msgid "Payments"
@@ -4538,23 +4539,23 @@ msgstr "عطلة نهاية الأسبوع"
 
 #: templates/insights.html:123
 msgid "Inpatient & Boarding Load"
-msgstr "حِمل التنويم والإيواء"
+msgstr "حِمل الإقامة المرضية والفندقية"
 
 #: templates/insights.html:125
 msgid "Avg. Inpatient Stay (Days)"
-msgstr "متوسط مدة التنويم (بالأيام)"
+msgstr "متوسط مدة الإقامة المرضية (بالأيام)"
 
 #: templates/insights.html:126
 msgid "Avg. Boarding Stay (Days)"
-msgstr "متوسط مدة الإيواء (بالأيام)"
+msgstr "متوسط مدة الإقامة الفندقية (بالأيام)"
 
 #: templates/insights.html:130
 msgid "Active Inpatient Cases"
-msgstr "حالات التنويم النشطة"
+msgstr "حالات الإقامة المرضية النشطة"
 
 #: templates/insights.html:130
 msgid "Active Boarding Stays"
-msgstr "إقامات الإيواء النشطة"
+msgstr "الإقامات الفندقية النشطة"
 
 #: templates/insights.html:143
 msgid "Cash Register Health"
@@ -4739,7 +4740,7 @@ msgstr ""
 "كل صنف له باركود أنشأه VetClinicSystem. حدد عدد الملصقات التي يحتاجها كل "
 "صنف، وأزل ما لا تريده في هذه الطباعة، ثم اطبعها جميعًا معًا."
 
-#: templates/inventory_catalog.html:158 templates/settings.html:429
+#: templates/inventory_catalog.html:158 templates/settings.html:435
 msgid "Loading…"
 msgstr "جارٍ التحميل…"
 
@@ -4759,7 +4760,7 @@ msgstr "تعذّر تحميل باركود هذا الصنف."
 #: templates/inventory_catalog.html:205 templates/inventory_catalog.html:276
 #: templates/inventory_catalog.html:296 templates/inventory_catalog.html:322
 #: templates/inventory_catalog.html:395 templates/refunds.html:162
-#: templates/settings.html:491 templates/settings.html:520
+#: templates/settings.html:497 templates/settings.html:526
 msgid "Could not reach the server."
 msgstr "تعذّر الوصول إلى الخادم."
 
@@ -4993,16 +4994,16 @@ msgstr "الشريحة"
 #: templates/patient_detail.html:30
 #, python-format
 msgid "Inpatient Stays (%(cases)s)"
-msgstr "فترات التنويم (%(cases)s)"
+msgstr "فترات الإقامة المرضية (%(cases)s)"
 
 #: templates/patient_detail.html:47
 #, python-format
 msgid "Boarding Sessions (%(boarding_sessions)s)"
-msgstr "فترات الإيواء (%(boarding_sessions)s)"
+msgstr "فترات الإقامة الفندقية (%(boarding_sessions)s)"
 
 #: templates/patient_detail.html:53
 msgid "Open Boarding"
-msgstr "فتح إيواء"
+msgstr "فتح إقامة فندقية"
 
 #: templates/patient_detail.html:66
 #, python-format
@@ -5078,7 +5079,7 @@ msgstr "فتح الحالة →"
 
 #: templates/patient_history.html:16
 msgid "View boarding record →"
-msgstr "عرض سجل الإيواء →"
+msgstr "عرض سجل الإقامة الفندقية →"
 
 #: templates/patient_history.html:21
 msgid "No history recorded yet."
@@ -5343,9 +5344,9 @@ msgid ""
 "belongs in Cash Register instead."
 msgstr ""
 "يزيل مبلغ إيراد فقط — دون المساس بالمخزون. أدخل %(exactly_one)s من رقم "
-"الزيارة أو رقم حالة التنويم أو رقم الإيواء: يعكس الاسترداد ذلك السجل "
-"تحديدًا، والمبلغ محدود بما تبقّى قابلًا للاسترداد عليه. أما الاسترداد "
-"كبادرة حسن نية دون سجل خلفه فمكانه صندوق النقد."
+"الزيارة أو رقم حالة الإقامة المرضية أو رقم الإقامة الفندقية: يعكس "
+"الاسترداد ذلك السجل تحديدًا، والمبلغ محدود بما تبقّى قابلًا للاسترداد "
+"عليه. أما الاسترداد كبادرة حسن نية دون سجل خلفه فمكانه صندوق النقد."
 
 #: templates/refunds.html:55
 msgid "exactly one"
@@ -5367,11 +5368,11 @@ msgstr "(واحد من هذه الثلاثة)"
 
 #: templates/refunds.html:69
 msgid "Inpatient Case ID"
-msgstr "رقم حالة التنويم"
+msgstr "رقم حالة الإقامة المرضية"
 
 #: templates/refunds.html:70
 msgid "Boarding ID"
-msgstr "رقم الإيواء"
+msgstr "رقم الإقامة الفندقية"
 
 #: templates/refunds.html:71
 msgid "e.g. service not completed"
@@ -5383,21 +5384,21 @@ msgstr "تنفيذ استرداد خدمة"
 
 #: templates/refunds.html:80
 msgid "Recent Refunds"
-msgstr "المرتجعات الأخيرة"
+msgstr "المرتجعات النقدية الأخيرة"
 
 #: templates/refunds.html:87
 #, python-format
 msgid "Showing refunds on %(date_filter)s only."
-msgstr "عرض المرتجعات في %(date_filter)s فقط."
+msgstr "عرض المرتجعات النقدية في %(date_filter)s فقط."
 
 #: templates/refunds.html:89
 #, python-format
 msgid "No refunds recorded on %(day)s."
-msgstr "لا توجد مرتجعات مسجلة في %(day)s."
+msgstr "لا توجد مرتجعات نقدية مسجلة في %(day)s."
 
 #: templates/refunds.html:89
 msgid "No refunds recorded yet."
-msgstr "لا توجد مرتجعات مسجلة بعد."
+msgstr "لا توجد مرتجعات نقدية مسجلة بعد."
 
 #: templates/refunds.html:93
 msgid "Details"
@@ -5427,12 +5428,12 @@ msgstr "زيارة %(visit_id)s"
 #: templates/refunds.html:112
 #, python-format
 msgid "Inpatient Case %(case_id)s"
-msgstr "حالة تنويم %(case_id)s"
+msgstr "حالة إقامة مرضية %(case_id)s"
 
 #: templates/refunds.html:113
 #, python-format
 msgid "Boarding %(boarding_id)s"
-msgstr "إيواء %(boarding_id)s"
+msgstr "إقامة فندقية %(boarding_id)s"
 
 #: templates/refunds.html:117
 #, python-format
@@ -5455,8 +5456,8 @@ msgid ""
 "%(currency_label)s)."
 msgstr ""
 "طُبِّق على عملية البيع هذه إعفاء عن الفئات القليلة بمقدار {cleanup} "
-"%(currency_label)s — لا يمكن أن تتجاوز المرتجعات عليها ما حُصِّل فعليًا "
-"({total} %(currency_label)s)."
+"%(currency_label)s — لا يمكن أن تتجاوز المرتجعات النقدية عليها ما حُصِّل "
+"فعليًا ({total} %(currency_label)s)."
 
 #: templates/refunds.html:170
 msgid "This sale has no items."
@@ -5618,7 +5619,7 @@ msgstr ""
 msgid "Cohort (First Visit)"
 msgstr "المجموعة (الزيارة الأولى)"
 
-#: templates/retention.html:25 templates/settings.html:127
+#: templates/retention.html:25 templates/settings.html:133
 msgid "Size"
 msgstr "الحجم"
 
@@ -5677,63 +5678,66 @@ msgstr "ألوان هادئة — Vetzone IQ"
 msgid "Blue Shades — ChamPet IQ"
 msgstr "درجات الأزرق — ChamPet IQ"
 
-#: templates/settings.html:25
+#: templates/settings.html:23
+msgid "Language"
+msgstr "اللغة"
+#: templates/settings.html:31
 msgid "Inventory Alerts"
 msgstr "تنبيهات المخزون"
 
-#: templates/settings.html:27
+#: templates/settings.html:33
 msgid "Audit Overdue After (Days)"
 msgstr "يُعد الجرد متأخرًا بعد (أيام)"
 
-#: templates/settings.html:28
+#: templates/settings.html:34
 msgid "Expiry Warning Window (Days)"
 msgstr "مدة التنبيه قبل الانتهاء (أيام)"
 
-#: templates/settings.html:33
+#: templates/settings.html:39
 msgid "Day Starts At"
 msgstr "يبدأ اليوم عند"
 
-#: templates/settings.html:34
+#: templates/settings.html:40
 msgid "Day Ends At"
 msgstr "ينتهي اليوم عند"
 
-#: templates/settings.html:35
+#: templates/settings.html:41
 msgid "Slot Length (Minutes)"
 msgstr "مدة الفترة (بالدقائق)"
 
-#: templates/settings.html:39
+#: templates/settings.html:45
 msgid "Backups"
 msgstr "النسخ الاحتياطي"
 
-#: templates/settings.html:41
+#: templates/settings.html:47
 msgid "Backup Folder (on this computer)"
 msgstr "مجلد النسخ الاحتياطي (على هذا الجهاز)"
 
-#: templates/settings.html:43
+#: templates/settings.html:49
 msgid "e.g. /Users/you/VetClinicSystemBackups or D:\\VetClinicSystemBackups"
 msgstr "مثال: /Users/you/VetClinicSystemBackups أو D:\\VetClinicSystemBackups"
 
-#: templates/settings.html:44 templates/settings.html:157
+#: templates/settings.html:50 templates/settings.html:163
 msgid "Browse…"
 msgstr "تصفح…"
 
-#: templates/settings.html:47
+#: templates/settings.html:53
 msgid "Nightly Backup Time"
 msgstr "وقت النسخ الاحتياطي الليلي"
 
-#: templates/settings.html:48
+#: templates/settings.html:54
 msgid "Keep Last N Backups"
 msgstr "الاحتفاظ بآخر عدد من النسخ"
 
-#: templates/settings.html:49
+#: templates/settings.html:55
 msgid "Keep Logs For (Days)"
 msgstr "الاحتفاظ بالسجلات لمدة (أيام)"
 
-#: templates/settings.html:54
+#: templates/settings.html:60
 msgid "Health Check"
 msgstr "فحص السلامة"
 
-#: templates/settings.html:56
+#: templates/settings.html:62
 msgid ""
 "Once a day, shortly after the nightly backup, this app checks itself — "
 "that backups are running and restorable, that the backup folder is "
@@ -5745,23 +5749,23 @@ msgstr ""
 "القرص ليس ممتلئًا — ويعرض تحذيرًا على لوحة التحكم إذا احتاج شيء إلى "
 "انتباه."
 
-#: templates/settings.html:60
+#: templates/settings.html:66
 msgid "Warn If No Backup For (Days)"
 msgstr "التنبيه إذا لم توجد نسخة خلال (أيام)"
 
-#: templates/settings.html:65
+#: templates/settings.html:71
 msgid "Daily Health Check"
 msgstr "فحص السلامة اليومي"
 
-#: templates/settings.html:73
+#: templates/settings.html:79
 msgid "Run the daily health check and show its warnings"
 msgstr "تشغيل فحص السلامة اليومي وإظهار تحذيراته"
 
-#: templates/settings.html:78
+#: templates/settings.html:84
 msgid "Remote Monitoring (optional)"
 msgstr "المراقبة عن بُعد (اختياري)"
 
-#: templates/settings.html:80
+#: templates/settings.html:86
 #, python-format
 msgid ""
 "Off unless you fill this in. When set, this clinic sends a short daily "
@@ -5776,19 +5780,19 @@ msgstr ""
 "الجهاز عن الإرسال، يُبلَّغ المسؤول عن صيانة النظام — وهو الشيء الوحيد "
 "الذي لا يستطيع التطبيق الإبلاغ عنه وهو مطفأ."
 
-#: templates/settings.html:80
+#: templates/settings.html:86
 msgid "missing"
 msgstr "الغائبة"
 
-#: templates/settings.html:84
+#: templates/settings.html:90
 msgid "Monitoring Ping URL"
 msgstr "رابط المراقبة"
 
-#: templates/settings.html:85
+#: templates/settings.html:91
 msgid "https://… (leave blank to disable)"
 msgstr "https://… (اتركه فارغًا للتعطيل)"
 
-#: templates/settings.html:88
+#: templates/settings.html:94
 #, python-format
 msgid ""
 "Must start with %(scheme)s. Use a different URL for each clinic, so an "
@@ -5799,37 +5803,37 @@ msgstr ""
 "التنبيه من تحديد أيها توقف. %(warning)s — فمن يحصل عليه يستطيع إرسال نبضة"
 " مزيفة ومنع تنبيه حقيقي من الوصول إليك."
 
-#: templates/settings.html:88
+#: templates/settings.html:94
 msgid "Treat it like a password"
 msgstr "تعامل معه كأنه كلمة مرور"
 
-#: templates/settings.html:93
+#: templates/settings.html:99
 msgid "This Install's ID"
 msgstr "معرّف هذا التثبيت"
 
-#: templates/settings.html:95
+#: templates/settings.html:101
 msgid ""
 "Included in every ping so one monitoring account can watch several "
 "clinics."
 msgstr "مضمّن في كل إشارة ليتمكن حساب مراقبة واحد من متابعة عدة عيادات."
 
-#: templates/settings.html:101
+#: templates/settings.html:107
 msgid "Saves the sections above."
 msgstr "يحفظ الأقسام أعلاه."
 
-#: templates/settings.html:102
+#: templates/settings.html:108
 msgid "Save Settings"
 msgstr "حفظ الإعدادات"
 
-#: templates/settings.html:110
+#: templates/settings.html:116
 msgid "Backups & Restore"
 msgstr "النسخ الاحتياطي والاستعادة"
 
-#: templates/settings.html:110 templates/settings.html:190
+#: templates/settings.html:116 templates/settings.html:196
 msgid "Runs when you click"
 msgstr "يعمل عند الضغط على"
 
-#: templates/settings.html:111
+#: templates/settings.html:117
 msgid ""
 "The backup history and the restore that reads it, beside the folder they "
 "use."
@@ -5837,44 +5841,44 @@ msgstr ""
 "سجل النسخ الاحتياطي والاستعادة التي تقرأ منه، إلى جانب المجلد الذي "
 "يستخدمانه."
 
-#: templates/settings.html:115
+#: templates/settings.html:121
 msgid "Back Up Now"
 msgstr "نسخ احتياطي الآن"
 
-#: templates/settings.html:117
+#: templates/settings.html:123
 msgid "Set a backup folder above and save, then you can back up."
 msgstr "حدد مجلد النسخ الاحتياطي أعلاه واحفظ، ثم يمكنك أخذ نسخة."
 
-#: templates/settings.html:124
+#: templates/settings.html:130
 msgid "Recent Backups"
 msgstr "النسخ الاحتياطية الأخيرة"
 
-#: templates/settings.html:127 templates/settings.html:173
+#: templates/settings.html:133 templates/settings.html:179
 msgid "Started"
 msgstr "بدأ"
 
-#: templates/settings.html:127 templates/settings.html:173
+#: templates/settings.html:133 templates/settings.html:179
 msgid "Triggered By"
 msgstr "بدأه"
 
-#: templates/settings.html:127
+#: templates/settings.html:133
 msgid "File"
 msgstr "الملف"
 
-#: templates/settings.html:133 templates/settings.html:179
+#: templates/settings.html:139 templates/settings.html:185
 #, python-format
 msgid "Failed — %(error)s"
 msgstr "فشل — %(error)s"
 
-#: templates/settings.html:133
+#: templates/settings.html:139
 msgid "Running"
 msgstr "قيد التشغيل"
 
-#: templates/settings.html:144
+#: templates/settings.html:150
 msgid "Restore From Backup"
 msgstr "الاستعادة من نسخة احتياطية"
 
-#: templates/settings.html:147
+#: templates/settings.html:153
 msgid ""
 "A restore may not have completed — the app was stopped or crashed partway"
 " through the last one. Check the database carefully before continuing to "
@@ -5883,7 +5887,7 @@ msgstr ""
 "قد تكون عملية استعادة لم تكتمل — توقف التطبيق أو انهار في منتصف آخر "
 "عملية. افحص قاعدة البيانات بعناية قبل متابعة استخدام التطبيق."
 
-#: templates/settings.html:151
+#: templates/settings.html:157
 #, python-format
 msgid ""
 "Replaces %(all)s current data in VetClinicSystem IQ with the contents of "
@@ -5901,72 +5905,72 @@ msgstr ""
 "النسخة التي تُستعاد سيحتاج إلى إعادة ربط — شغّل %(command)s من مجلد "
 "التطبيق بعد ذلك للعثور عليها وإعادة ربطها بأمان."
 
-#: templates/settings.html:151
+#: templates/settings.html:157
 msgid "all"
 msgstr "كل"
 
-#: templates/settings.html:151
+#: templates/settings.html:157
 msgid "after"
 msgstr "بعد"
 
-#: templates/settings.html:154
+#: templates/settings.html:160
 msgid "Backup File To Restore"
 msgstr "ملف النسخة المراد استعادتها"
 
-#: templates/settings.html:156
+#: templates/settings.html:162
 msgid "Browse to a .dump backup file"
 msgstr "تصفح للوصول إلى ملف نسخة .dump"
 
-#: templates/settings.html:164
+#: templates/settings.html:170
 msgid "Restore Now"
 msgstr "استعادة الآن"
 
-#: templates/settings.html:170
+#: templates/settings.html:176
 msgid "Recent Restores"
 msgstr "عمليات الاستعادة الأخيرة"
 
-#: templates/settings.html:173
+#: templates/settings.html:179
 msgid "Source File"
 msgstr "الملف المصدر"
 
-#: templates/settings.html:190 templates/settings.html:191
+#: templates/settings.html:196 templates/settings.html:197
 msgid "Updates"
 msgstr "التحديثات"
 
-#: templates/settings.html:193
+#: templates/settings.html:199
 msgid "Current Version"
 msgstr "الإصدار الحالي"
 
-#: templates/settings.html:193
+#: templates/settings.html:199
 #, python-format
 msgid "VetClinicSystem IQ v%(app_version)s"
 msgstr "VetClinicSystem IQ الإصدار %(app_version)s"
 
-#: templates/settings.html:195
+#: templates/settings.html:201
 msgid "Check for Updates"
 msgstr "التحقق من التحديثات"
 
-#: templates/settings.html:199
+#: templates/settings.html:205
 msgid "Version"
 msgstr "الإصدار"
 
-#: templates/settings.html:199
+#: templates/settings.html:205
 msgid "is available"
 msgstr "متاح"
 
-#: templates/settings.html:202 templates/settings.html:351
+#: templates/settings.html:208 templates/settings.html:357
 msgid "Update Now"
 msgstr "تحديث الآن"
 
-#: templates/settings.html:203 templates/settings.html:351
+#: templates/settings.html:209 templates/settings.html:357
 msgid "Not Now"
 msgstr "ليس الآن"
 
-#: templates/settings.html:208
+#: templates/settings.html:214
 msgid "Rollback to Previous Version"
 msgstr "الرجوع إلى الإصدار السابق"
 
-#: templates/settings.html:212
+#: templates/settings.html:218
 msgid ""
 "Automatic updates aren't set up on this install yet. An administrator can"
 " enable them by running"
@@ -5974,27 +5978,27 @@ msgstr ""
 "التحديثات التلقائية غير مُفعّلة على هذا التثبيت بعد. يمكن للمدير تفعيلها "
 "بتشغيل"
 
-#: templates/settings.html:213
+#: templates/settings.html:219
 msgid "python3 setup.py --enable-updates"
 msgstr "python3 setup.py --enable-updates"
 
-#: templates/settings.html:213
+#: templates/settings.html:219
 msgid "on the computer running VetClinicSystem IQ."
 msgstr "على الجهاز الذي يشغّل VetClinicSystem IQ."
 
-#: templates/settings.html:218 templates/settings.html:227
+#: templates/settings.html:224 templates/settings.html:233
 msgid "Startup & Shutdown"
 msgstr "التشغيل والإيقاف"
 
-#: templates/settings.html:218
+#: templates/settings.html:224
 msgid "Applies immediately"
 msgstr "يسري فورًا"
 
-#: templates/settings.html:237
+#: templates/settings.html:243
 msgid "Start VetClinicSystem IQ automatically when this computer starts"
 msgstr "تشغيل VetClinicSystem IQ تلقائيًا عند بدء تشغيل هذا الجهاز"
 
-#: templates/settings.html:241
+#: templates/settings.html:247
 msgid ""
 "On shutdown or restart, the app takes a final backup and shuts down "
 "cleanly before the computer powers off, so nothing is left mid-write."
@@ -6002,7 +6006,7 @@ msgstr ""
 "عند الإيقاف أو إعادة التشغيل، يأخذ التطبيق نسخة احتياطية أخيرة ويُغلق "
 "بشكل سليم قبل إطفاء الجهاز، فلا يبقى شيء في منتصف الكتابة."
 
-#: templates/settings.html:245
+#: templates/settings.html:251
 msgid ""
 "Not available on this operating system — start VetClinicSystem IQ "
 "manually using the launcher."
@@ -6010,34 +6014,34 @@ msgstr ""
 "غير متاح على نظام التشغيل هذا — شغّل VetClinicSystem IQ يدويًا باستخدام "
 "المشغّل."
 
-#: templates/settings.html:286
+#: templates/settings.html:292
 msgid "You're on the latest version."
 msgstr "أنت على أحدث إصدار."
 
-#: templates/settings.html:290
+#: templates/settings.html:296
 msgid "Couldn't check for updates."
 msgstr "تعذّر التحقق من التحديثات."
 
-#: templates/settings.html:298 templates/settings.html:313
+#: templates/settings.html:304 templates/settings.html:319
 msgid "Restarting VetClinicSystem IQ"
 msgstr "جارٍ إعادة تشغيل VetClinicSystem IQ"
 
-#: templates/settings.html:299
+#: templates/settings.html:305
 msgid "The app is restarting — this page will reconnect automatically."
 msgstr "التطبيق قيد إعادة التشغيل — ستُعاد هذه الصفحة تلقائيًا."
 
-#: templates/settings.html:314
+#: templates/settings.html:320
 msgid ""
 "Taking longer than expected to come back — check with whoever manages "
 "this computer."
 msgstr "العودة تستغرق وقتًا أطول من المتوقع — راجع المسؤول عن هذا الجهاز."
 
-#: templates/settings.html:328 templates/settings.html:345
+#: templates/settings.html:334 templates/settings.html:351
 #, python-brace-format
 msgid "{job} failed to start."
 msgstr "تعذّر بدء {job}."
 
-#: templates/settings.html:350
+#: templates/settings.html:356
 msgid ""
 "This will restart VetClinicSystem IQ for everyone for about 30 seconds. A"
 " backup will be taken first. Continue?"
@@ -6045,7 +6049,7 @@ msgstr ""
 "سيؤدي هذا إلى إعادة تشغيل VetClinicSystem IQ للجميع لنحو ٣٠ ثانية. ستُؤخذ"
 " نسخة احتياطية أولًا. هل تريد المتابعة؟"
 
-#: templates/settings.html:359
+#: templates/settings.html:365
 msgid ""
 "This will roll back to the previous version and restart VetClinicSystem "
 "IQ for everyone for about 30 seconds. Continue?"
@@ -6053,15 +6057,15 @@ msgstr ""
 "سيؤدي هذا إلى التراجع إلى الإصدار السابق وإعادة تشغيل VetClinicSystem IQ "
 "للجميع لنحو ٣٠ ثانية. هل تريد المتابعة؟"
 
-#: templates/settings.html:360
+#: templates/settings.html:366
 msgid "Roll Back"
 msgstr "التراجع عن التحديث"
 
-#: templates/settings.html:373 templates/settings.html:417
+#: templates/settings.html:379 templates/settings.html:423
 msgid "Choose Backup Folder"
 msgstr "اختيار مجلد النسخ الاحتياطي"
 
-#: templates/settings.html:374
+#: templates/settings.html:380
 msgid ""
 "Browsing this computer's folders — the one running VetClinicSystem IQ, "
 "since that's where backups are actually read and written."
@@ -6069,60 +6073,60 @@ msgstr ""
 "تصفح مجلدات هذا الجهاز — الجهاز الذي يشغّل VetClinicSystem IQ، لأنه "
 "المكان الذي تُقرأ منه النسخ الاحتياطية وتُكتب إليه فعليًا."
 
-#: templates/settings.html:380
+#: templates/settings.html:386
 msgid "New folder name"
 msgstr "اسم المجلد الجديد"
 
-#: templates/settings.html:381
+#: templates/settings.html:387
 msgid "+ New Folder"
 msgstr "+ مجلد جديد"
 
-#: templates/settings.html:385 templates/settings.html:409
+#: templates/settings.html:391 templates/settings.html:415
 msgid "Select This Folder"
 msgstr "اختيار هذا المجلد"
 
-#: templates/settings.html:417
+#: templates/settings.html:423
 msgid "Choose Backup File"
 msgstr "اختيار ملف النسخة الاحتياطية"
 
-#: templates/settings.html:439
+#: templates/settings.html:445
 msgid "Could not open that folder."
 msgstr "تعذّر فتح هذا المجلد."
 
-#: templates/settings.html:456
+#: templates/settings.html:462
 msgid "↑ .. (up one level)"
 msgstr "↑ .. (مستوى للأعلى)"
 
-#: templates/settings.html:466
+#: templates/settings.html:472
 msgid "backup files"
 msgstr "ملفات النسخ الاحتياطي"
 
-#: templates/settings.html:513
+#: templates/settings.html:519
 msgid "Could not create that folder."
 msgstr "تعذّر إنشاء هذا المجلد."
 
-#: templates/settings.html:567 templates/settings.html:584
+#: templates/settings.html:573 templates/settings.html:590
 msgid "Could not start the backup."
 msgstr "تعذّر بدء النسخ الاحتياطي."
 
-#: templates/settings.html:572
+#: templates/settings.html:578
 msgid "Backup complete."
 msgstr "اكتمل النسخ الاحتياطي."
 
-#: templates/settings.html:572 templates/settings.html:578
+#: templates/settings.html:578 templates/settings.html:584
 msgid "Backup failed."
 msgstr "فشل النسخ الاحتياطي."
 
-#: templates/settings.html:607 templates/settings.html:628
+#: templates/settings.html:613 templates/settings.html:634
 msgid "Could not start the restore."
 msgstr "تعذّر بدء الاستعادة."
 
-#: templates/settings.html:612
+#: templates/settings.html:618
 #, python-brace-format
 msgid "{message}. Please log in again."
 msgstr "{message}. يرجى تسجيل الدخول مرة أخرى."
 
-#: templates/settings.html:616 templates/settings.html:622
+#: templates/settings.html:622 templates/settings.html:628
 msgid "Restore failed."
 msgstr "فشلت الاستعادة."
 
@@ -6854,4 +6858,7 @@ msgstr "لا توجد تذكيرات رعاية وقائية مسجلة."
 
 #~ msgid "from the app folder afterward to find and relink them safely."
 #~ msgstr "من مجلد التطبيق بعد ذلك للعثور عليها وإعادة ربطها بأمان."
+
+#~ msgid "Switch language"
+#~ msgstr "تغيير اللغة"
 

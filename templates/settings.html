@@ -20,6 +20,12 @@
         <option value="champet" {{ 'selected' if settings.theme_palette == 'champet' }}>{{ _('Blue Shades — ChamPet IQ') }}</option>
       </select>
     </div>
+        <div class="field"><label for="settings-5-language">{{ _('Language') }}</label>
+          <select id="settings-5-language" name="language">
+            <option value="en" {{ 'selected' if settings.language in (None, '', 'en') }}>English</option>
+            <option value="ar" {{ 'selected' if settings.language == 'ar' }}>العربية</option>
+          </select>
+        </div>
   </div>
 
   <div class="section-title">{{ _('Inventory Alerts') }}</div>

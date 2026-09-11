@@ -221,6 +221,17 @@ def settings_page():
             flash(_("Not a valid color palette."), "error")
             return redirect(url_for("settings.settings_page"))
 
+        # `language` drives which catalogue every page renders from, and its
+        # value reaches Flask-Babel directly. A whitelist rather than trusting
+        # the form, same reasoning as every other settings field validated
+        # here — and an unknown locale would otherwise fall back silently,
+        # which reads as "the setting did not save".
+        SUPPORTED_LANGUAGES = ("en", "ar")
+        lang_val = request.form.get("language")
+        if lang_val is not None and lang_val not in SUPPORTED_LANGUAGES:
+            flash(_("Not a valid language."), "error")
+            return redirect(url_for("settings.settings_page"))
+
         TIME_FIELDS = ["appt_start_time", "appt_end_time", "backup_time"]
         for key in TIME_FIELDS:
             val = request.form.get(key)
@@ -257,7 +268,7 @@ def settings_page():
         orphaned_before = len(logic.orphaned_appointments(db))
         for key in ["clinic_name", "clinic_location", "audit_overdue_days", "expiry_soon_days", "opening_date",
                     "appt_start_time", "appt_end_time", "appt_slot_minutes",
-                    "backup_dir", "backup_time", "backup_retention", "theme_palette",
+                    "backup_dir", "backup_time", "backup_retention", "theme_palette", "language",
                     "selfcheck_backup_max_age_days", "heartbeat_url", "log_retention_days"]:
             val = request.form.get(key)
             if val is not None:
