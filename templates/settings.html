@@ -310,7 +310,7 @@ function waitForRestart(successMessage) {
       const res = await fetch('{{ url_for('health') }}', { cache: 'no-store' });
       if (res.ok) {
         clearInterval(poll);
-        window.VZToast.show(successMessage, 'success');
+        window.VZToast.show(successMessage || {{ _('Done — reloading.')|tojson }}, 'success');
         setTimeout(() => window.location.reload(), 800);
       }
     } catch (err) { /* still restarting — keep polling */ }
@@ -322,7 +322,7 @@ function waitForRestart(successMessage) {
   }, 2000);
 }
 
-function runUpdateJob(startUrl, startingMessage, successMessagePrefix) {
+function runUpdateJob(startUrl, startingMessage, failedMessage) {
   const panel = document.getElementById('updateProgress');
   panel.style.display = 'block';
   fetch(startUrl, {
@@ -336,15 +336,15 @@ function runUpdateJob(startUrl, startingMessage, successMessagePrefix) {
         onUpdate: (d) => window.VZProgress.render(panel, d),
         onDone: (d) => {
           if (d.ok) {
-            waitForRestart(d.message || (successMessagePrefix + ' complete.'));
+            waitForRestart(d.message);
           } else {
             window.VZProgress.render(panel, { status: 'error', steps: ['Update'], current: 0, message: d.message });
-            window.VZToast.show(d.message || (successMessagePrefix + ' failed.'), 'error');
+            window.VZToast.show(d.message || failedMessage, 'error');
           }
         },
         onError: (d) => {
           window.VZProgress.render(panel, { status: 'error', steps: ['Update'], current: 0, message: d.message });
-          window.VZToast.show(d.message || (successMessagePrefix + ' failed.'), 'error');
+          window.VZToast.show(d.message || failedMessage, 'error');
         },
       });
     })
@@ -357,7 +357,8 @@ async function applyUpdate() {
     { okLabel: {{ _('Update Now')|tojson }}, cancelLabel: {{ _('Not Now')|tojson }}, originEl: document.getElementById('updApplyBtn') }
   );
   if (!ok) return;
-  runUpdateJob('{{ url_for('settings.settings_updates_apply') }}', 'Update', 'Update');
+  runUpdateJob('{{ url_for('settings.settings_updates_apply') }}',
+              {{ _('Update')|tojson }}, {{ _('Update failed.')|tojson }});
 }
 
 async function rollbackUpdate() {
@@ -366,7 +367,8 @@ async function rollbackUpdate() {
     { okLabel: {{ _('Roll Back')|tojson }}, cancelLabel: 'Cancel', originEl: document.getElementById('updRollbackBtn') }
   );
   if (!ok) return;
-  runUpdateJob('{{ url_for('settings.settings_updates_rollback') }}', 'Rollback', 'Rollback');
+  runUpdateJob('{{ url_for('settings.settings_updates_rollback') }}',
+              {{ _('Rollback')|tojson }}, {{ _('Rollback failed.')|tojson }});
 }
 </script>
 {% endif %}

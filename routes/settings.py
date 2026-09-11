@@ -362,7 +362,8 @@ def settings_backup_now():
             conn.close()
 
     job_id = jobs.start(
-        ["Checking backup folder", "Dumping database", "Applying retention policy", "Done"],
+        [_("Checking backup folder"), _("Dumping database"),
+         _("Applying retention policy"), _("Done")],
         task,
     )
     return jsonify({"job_id": job_id})
@@ -427,7 +428,8 @@ def settings_restore_now():
         return {"ok": ok, "message": message}
 
     job_id = jobs.start(
-        ["Checking backup file", "Restoring database", "Reconciling schema", "Recording result", "Done"],
+        [_("Checking backup file"), _("Restoring database"), _("Reconciling schema"),
+         _("Recording result"), _("Done")],
         task,
     )
     return jsonify({"job_id": job_id})
@@ -540,8 +542,9 @@ def settings_updates_apply():
         return {"ok": ok, "message": message}
 
     job_id = jobs.start(
-        ["Backing up database", "Downloading release", "Validating release",
-         "Applying database changes", "Verifying the new version", "Switching to the new version"],
+        [_("Backing up database"), _("Downloading release"), _("Validating release"),
+         _("Applying database changes"), _("Verifying the new version"),
+         _("Switching to the new version")],
         task,
     )
     return jsonify({"job_id": job_id})
@@ -562,5 +565,5 @@ def settings_updates_rollback():
         ok, message = updater.rollback_to_previous()
         return {"ok": ok, "message": message}
 
-    job_id = jobs.start(["Rolling back"], task)
+    job_id = jobs.start([_("Rolling back")], task)
     return jsonify({"job_id": job_id})

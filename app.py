@@ -1240,7 +1240,7 @@ def reports_rebuild_summary():
         finally:
             conn.close()
 
-    job_id = jobs.start(["Rebuilding monthly summary"], task)
+    job_id = jobs.start([_("Rebuilding monthly summary")], task)
     return jsonify({"job_id": job_id})
 
 
@@ -1314,8 +1314,9 @@ def insights():
 
     return _render_with_progress(
         "insights.html",
-        ["Revenue by category", "Vet performance", "Client value",
-         "Weekday appointment load", "Inpatient/boarding occupancy", "Payment mix", "Cash Register health"],
+        [_("Revenue by category"), _("Vet performance"), _("Client value"),
+         _("Weekday appointment load"), _("Inpatient/boarding occupancy"),
+         _("Payment mix"), _("Cash Register health")],
         compute,
         page_title="Loading Insights",
         page_note="Running six report queries in parallel \u2014 this can take a moment on a clinic with a lot of history.",
@@ -1345,7 +1346,7 @@ def retention():
 
     return _render_with_progress(
         "retention.html",
-        ["Computing cohort retention grid"],
+        [_("Computing cohort retention grid")],
         compute,
         page_title="Loading Retention",
         page_note="This runs one query across your full visit history. There's no way to show finer-grained "
