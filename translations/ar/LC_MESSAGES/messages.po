@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-09-11 15:03+0300\n"
+"POT-Creation-Date: 2026-09-11 15:25+0300\n"
 "PO-Revision-Date: 2026-09-11 12:18+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ar\n"
@@ -191,7 +191,8 @@ msgid "Password reset. The user will be asked to set a new one on next login."
 msgstr "تمت إعادة تعيين كلمة المرور. سيُطلب من المستخدم تعيين كلمة جديدة عند تسجيل الدخول التالي."
 "تمت إعادة تعيين كلمة المرور. سيُطلب من المستخدم تعيين كلمة جديدة عند "
 "تسجيل الدخول التالي.تمت إعادة تعيين كلمة المرور. سيُطلب من المستخدم تعيين"
-" كلمة جديدة عند تسجيل الدخول التالي."
+" كلمة جديدة عند تسجيل الدخول التالي.تمت إعادة تعيين كلمة المرور. سيُطلب "
+"من المستخدم تعيين كلمة جديدة عند تسجيل الدخول التالي."
 
 #: routes/admin.py:237
 msgid "Give the new role a name."
@@ -1189,6 +1190,11 @@ msgstr "اختر تاريخًا لمراجعة من سجّل الدخول وما
 msgid "Clear"
 msgstr "مسح"
 
+#: templates/admin_logs.html:13
+#, python-format
+msgid "Changes On %(day)s"
+msgstr "التغييرات في %(day)s"
+
 #: templates/admin_logs.html:16 templates/admin_logs.html:38
 #: templates/appointments.html:27
 msgid "Time"
@@ -1221,6 +1227,11 @@ msgstr "القديم ← الجديد"
 #: templates/admin_logs.html:29
 msgid "No changes logged on this date."
 msgstr "لا توجد تغييرات مسجلة في هذا التاريخ."
+
+#: templates/admin_logs.html:35
+#, python-format
+msgid "Logins On %(day)s"
+msgstr "عمليات الدخول في %(day)s"
 
 #: templates/admin_logs.html:38 templates/admin_users.html:21
 #: templates/admin_users.html:144 templates/login.html:17
@@ -1295,6 +1306,11 @@ msgstr "الحالة"
 msgid "Reset Password"
 msgstr "إعادة تعيين كلمة المرور"
 
+#: templates/admin_users.html:37
+#, python-format
+msgid "Role default (%(u)s%%)"
+msgstr "الافتراضي للدور (%(u)s٪)"
+
 #: templates/admin_users.html:46 templates/change_password.html:14
 msgid "New Password"
 msgstr "كلمة مرور جديدة"
@@ -1305,8 +1321,8 @@ msgstr "إعادة تعيين"
 
 #: templates/admin_users.html:61
 msgid ""
-"The Role dropdown always reflects whatever roles exist in the Roles &amp;"
-" Permissions tab. A per-user discount override (set at creation, in the "
+"The Role dropdown always reflects whatever roles exist in the Roles & "
+"Permissions tab. A per-user discount override (set at creation, in the "
 "New User form) shows here as \"Custom\" — most staff just inherit their "
 "role's limit."
 msgstr ""
@@ -1490,8 +1506,13 @@ msgstr "هذا الأسبوع"
 msgid ""
 "No role is currently marked \"Can be assigned as a vet,\" so there's "
 "nothing to schedule against below. Turn it on for at least one role in "
-"Users &amp; Roles →"
+"Users & Roles →"
 msgstr ""
+
+#: templates/appointments.html:20
+#, python-format
+msgid "%(orphaned)s appointment(s) need attention — not shown on the grid below"
+msgstr "%(orphaned)s موعد بحاجة إلى انتباه — غير معروضة في الجدول أدناه"
 
 #: templates/appointments.html:22
 msgid ""
@@ -1581,6 +1602,11 @@ msgstr "السبب"
 #: templates/appointments.html:108
 msgid "Book"
 msgstr "حجز"
+
+#: templates/audit_session_view.html:8
+#, python-format
+msgid "Performed by %(sess)s ·"
+msgstr "نُفِّذ بواسطة %(sess)s ·"
 
 #: templates/audit_session_view.html:13 templates/cash_register.html:109
 #: templates/cash_register.html:136
@@ -1702,6 +1728,13 @@ msgstr "نعم، تأكيد نهائي"
 #: templates/audit_sessions_list.html:5 templates/base.html:98
 msgid "Audit History"
 msgstr "سجل الجرد"
+
+#: templates/audit_sessions_list.html:5
+#, python-format
+msgid ""
+"One session per shelf-walk. Only Confirmed audits count toward Inventory "
+"Status and the Ordering Sheet. %(total_count)s shown."
+msgstr ""
 
 #: templates/audit_sessions_list.html:7 templates/inventory_status.html:10
 msgid "+ Start / Resume Today's Audit"
@@ -1959,6 +1992,11 @@ msgstr "الغرفة المخصصة"
 msgid "Admitted Items (Leash, Bed, Etc.)"
 msgstr "الأغراض المستلمة (رباط، فراش، إلخ)"
 
+#: templates/boarding.html:30 templates/boarding.html:153
+#, python-format
+msgid "Price per Day (%(currency_label)s)"
+msgstr "السعر اليومي (%(currency_label)s)"
+
 #: templates/boarding.html:31 templates/boarding.html:154
 msgid "Auto-suggested from price × nights"
 msgstr "مقترح تلقائيًا من السعر × عدد الليالي"
@@ -2017,6 +2055,17 @@ msgstr "تسجيل حادثة"
 #: templates/distributor_detail.html:89
 msgid "Record Payment"
 msgstr "تسجيل دفعة"
+
+#: templates/boarding.html:83
+#, python-format
+msgid "Discount (max %(discount_cap)s%%)"
+msgstr "الخصم (بحد أقصى %(discount_cap)s٪)"
+
+#: templates/boarding.html:84 templates/inpatient_detail.html:171
+#: templates/pos.html:25 templates/visit_detail.html:137
+#, python-format
+msgid "Clean Up (max %(CLEANUP_CAP)s %(currency_label)s)"
+msgstr "الإعفاء عن الفئات القليلة (بحد أقصى %(CLEANUP_CAP)s %(currency_label)s)"
 
 #: templates/boarding.html:85 templates/consignment_settlements.html:46
 #: templates/distributor_detail.html:59 templates/distributor_detail.html:82
@@ -2155,6 +2204,11 @@ msgstr "المجموع الفرعي"
 msgid "Discount"
 msgstr "الخصم"
 
+#: templates/cash_register.html:42
+#, python-format
+msgid "No money-in/money-out activity recorded on %(day)s."
+msgstr "لا توجد حركة دخول أو خروج أموال مسجلة في %(day)s."
+
 #: templates/cash_register.html:47
 msgid "Paid Out of Register"
 msgstr "المصروف من الصندوق"
@@ -2162,6 +2216,11 @@ msgstr "المصروف من الصندوق"
 #: templates/cash_register.html:52
 msgid "Register Payout"
 msgstr "صرف من الصندوق"
+
+#: templates/cash_register.html:63
+#, python-format
+msgid "Totals for %(day)s"
+msgstr "إجماليات %(day)s"
 
 #: templates/cash_register.html:71 templates/insights.html:157
 msgid "Perfect"
@@ -2183,6 +2242,11 @@ msgstr "لم يُجرد"
 msgid "e.g. paid the produce delivery driver"
 msgstr "مثال: دفع لسائق توصيل المستلزمات"
 
+#: templates/cash_register.html:117
+#, python-format
+msgid "Perform Audit — %(day)s"
+msgstr "تنفيذ جرد — %(day)s"
+
 #: templates/cash_register.html:118
 msgid ""
 "Only Cash is audited here — Card and Transfer settle\n"
@@ -2200,6 +2264,11 @@ msgstr "إجمالي البطاقة في النظام"
 #: templates/cash_register.html:122
 msgid "System Transfer Total"
 msgstr "إجمالي الحوالات في النظام"
+
+#: templates/cash_register.html:127
+#, python-format
+msgid "Cash Counted From the Register (%(currency_label)s)"
+msgstr "النقد المعدود من الصندوق (%(currency_label)s)"
 
 #: templates/cash_register.html:130
 msgid "Notes (optional)"
@@ -2262,6 +2331,12 @@ msgstr "أمانة؟"
 msgid "Distributor"
 msgstr "المورد"
 
+#: templates/consignment_items.html:17 templates/inventory_catalog.html:42
+#: templates/price_list.html:39
+#, python-format
+msgid "Cost Price (%(currency_label)s)"
+msgstr "سعر التكلفة (%(currency_label)s)"
+
 #: templates/consignment_items.html:31
 msgid "Locked — has consignment activity"
 msgstr "مقفل — لديه حركة أمانة"
@@ -2270,9 +2345,26 @@ msgstr "مقفل — لديه حركة أمانة"
 msgid "No active Retail items — add one from Inventory Catalog first."
 msgstr "لا توجد أصناف تجزئة نشطة — أضف صنفًا من دليل الأصناف أولًا."
 
+#: templates/consignment_overview.html:7
+#, python-format
+msgid ""
+"Distributor-owned stock on your shelves. %(rows)s distributor(s) with "
+"Consignment items."
+msgstr ""
+
 #: templates/consignment_overview.html:15
 msgid "Shelf Units"
 msgstr "الوحدات على الرف"
+
+#: templates/consignment_overview.html:16
+#, python-format
+msgid "Shelf Value (%(currency_label)s)"
+msgstr "قيمة الرف (%(currency_label)s)"
+
+#: templates/consignment_overview.html:17
+#, python-format
+msgid "Amount Owed (%(currency_label)s)"
+msgstr "المبلغ المستحق (%(currency_label)s)"
 
 #: templates/consignment_overview.html:18
 msgid "Last Settlement"
@@ -2298,6 +2390,11 @@ msgstr "لم يتم تحديد أي أصناف أمانة بعد — ابدأ م
 msgid "Consignment Receiving"
 msgstr "استلام الأمانة"
 
+#: templates/consignment_receiving.html:7
+#, python-format
+msgid "Stock a distributor drops off. %(total_count)s receipt(s) on file."
+msgstr "مخزون يورّده المورد. %(total_count)s عملية استلام مسجلة."
+
 #: templates/consignment_receiving.html:10
 msgid "+ Log Receipt"
 msgstr "+ تسجيل استلام"
@@ -2309,6 +2406,14 @@ msgstr "+ تسجيل استلام"
 #: templates/consignment_shrinkage.html:55
 msgid "Quantity"
 msgstr "الكمية"
+
+#: templates/consignment_receiving.html:26
+#: templates/consignment_receiving.html:43
+#: templates/consignment_returns.html:43
+#: templates/consignment_shrinkage.html:56
+#, python-format
+msgid "Unit Cost (%(currency_label)s)"
+msgstr "تكلفة الوحدة (%(currency_label)s)"
 
 #: templates/consignment_receiving.html:27
 msgid "Received Date"
@@ -2337,6 +2442,15 @@ msgstr "لا توجد عمليات استلام مسجلة بعد."
 #: templates/consignment_returns.html:6
 msgid "Consignment Returns"
 msgstr "مرتجعات الأمانة"
+
+#: templates/consignment_returns.html:7
+#, python-format
+msgid ""
+"Unsold stock handed back to the distributor. %(total_count)s return(s) on"
+" file. No revenue,\n"
+"      COGS, or settlement impact — nothing sold, so nothing owed either "
+"way."
+msgstr ""
 
 #: templates/consignment_returns.html:11
 msgid "+ Log Return"
@@ -2391,9 +2505,24 @@ msgstr "الشهر"
 msgid "Units Sold"
 msgstr "الوحدات المباعة"
 
+#: templates/consignment_sales.html:27
+#, python-format
+msgid "Owed to Distributor (%(currency_label)s)"
+msgstr "المستحق للمورد (%(currency_label)s)"
+
+#: templates/consignment_sales.html:27
+#, python-format
+msgid "Your Markup (%(currency_label)s)"
+msgstr "هامش ربحك (%(currency_label)s)"
+
 #: templates/consignment_sales.html:41
 msgid "No Consignment sales in this range."
 msgstr "لا توجد مبيعات أمانة في هذه الفترة."
+
+#: templates/consignment_settlements.html:6
+#, python-format
+msgid "Settle with %(distributor)s"
+msgstr "التسوية مع %(distributor)s"
 
 #: templates/consignment_settlements.html:9
 msgid "← Back to Overview"
@@ -2414,6 +2543,11 @@ msgstr "نشاط جديد في هذه الفترة"
 #: templates/consignment_settlements.html:17
 msgid "Amount Owed Now"
 msgstr "المبلغ المستحق الآن"
+
+#: templates/consignment_settlements.html:25
+#, python-format
+msgid "Amount Paid (%(currency_label)s)"
+msgstr "المبلغ المدفوع (%(currency_label)s)"
 
 #: templates/consignment_settlements.html:26 templates/pos.html:30
 #: templates/pos_receipt.html:15
@@ -2514,8 +2648,13 @@ msgstr "+ تسجيل زيارة"
 #: templates/dashboard.html:16
 msgid ""
 "This month's operating costs haven't been entered yet — add them on the "
-"Monthly P&amp;L page before the month closes."
+"Monthly P&L page before the month closes."
 msgstr ""
+
+#: templates/dashboard.html:22
+#, python-format
+msgid "%(backup_alert)s Open Settings →"
+msgstr "%(backup_alert)s فتح الإعدادات →"
 
 #: templates/dashboard.html:46
 msgid "Open Settings →"
@@ -2573,6 +2712,11 @@ msgstr "لا يوجد ما هو مستحق اليوم."
 msgid "Reminder Calls — Call Today for Tomorrow's Visit"
 msgstr "مكالمات التذكير — اتصل اليوم لزيارة الغد"
 
+#: templates/dashboard.html:112
+#, python-format
+msgid "Visit set for %(f)s"
+msgstr "زيارة محددة في %(f)s"
+
 #: templates/dashboard.html:117
 msgid "No reminder calls needed today."
 msgstr "لا توجد مكالمات تذكير مطلوبة اليوم."
@@ -2604,6 +2748,11 @@ msgstr "لا توجد عمليات عناية وتصفيف جارية."
 #: templates/dashboard.html:146 templates/inventory_status.html:16
 msgid "Low Stock"
 msgstr "مخزون منخفض"
+
+#: templates/dashboard.html:148
+#, python-format
+msgid "%(i)s %(i2)s left (threshold %(i3)s)"
+msgstr "المتبقي %(i)s %(i2)s (الحد %(i3)s)"
 
 #: templates/dashboard.html:149
 msgid "View ordering sheet →"
@@ -2677,9 +2826,19 @@ msgstr "رقم الفاتورة"
 msgid "Distributor's own reference, optional"
 msgstr "مرجع المورد الخاص، اختياري"
 
+#: templates/distributor_detail.html:34
+#, python-format
+msgid "Total Amount (%(currency_label)s)"
+msgstr "المبلغ الإجمالي (%(currency_label)s)"
+
 #: templates/distributor_detail.html:38
 msgid "Save Bill"
 msgstr "حفظ الفاتورة"
+
+#: templates/distributor_detail.html:53
+#, python-format
+msgid "Total %(bill)s · Paid %(bill2)s · Balance %(bill3)s %(currency_label)s"
+msgstr "الإجمالي %(bill)s · المدفوع %(bill2)s · الرصيد %(bill3)s %(currency_label)s"
 
 #: templates/distributor_detail.html:72
 msgid "No payments recorded yet."
@@ -2697,9 +2856,19 @@ msgstr "حذف الفاتورة"
 msgid "No bills logged yet for this distributor."
 msgstr "لا توجد فواتير مسجلة لهذا المورد بعد."
 
+#: templates/distributors.html:7
+#, python-format
+msgid "Suppliers you restock inventory from. %(distributors)s on file."
+msgstr "الموردون الذين تعيد التخزين منهم. %(distributors)s مسجل."
+
 #: templates/distributors.html:9
 msgid "+ New Distributor"
 msgstr "+ مورد جديد"
+
+#: templates/distributors.html:15
+#, python-format
+msgid "Total Outstanding (%(currency_label)s)"
+msgstr "إجمالي المستحق (%(currency_label)s)"
 
 #: templates/distributors.html:17
 msgid "Distributors With a Balance"
@@ -2839,6 +3008,18 @@ msgstr "تفاصيل للدعم الفني — يمكن نسخها وإرسال�
 msgid "Copy"
 msgstr "نسخ"
 
+#: templates/error_500.html:20
+#, python-format
+msgid ""
+"Error ID:  %(error_id)s\n"
+"Time:      %(error_time)s\n"
+"Page:      %(request_line)s\n"
+"Type:      %(exc_type)s\n"
+"Message:   %(exc_message)s\n"
+"\n"
+"%(traceback_text)s"
+msgstr ""
+
 #: templates/error_500.html:31 templates/error_busy.html:20
 #: templates/error_busy.html:34
 msgid "Try Again"
@@ -2886,6 +3067,13 @@ msgstr "أضف رقم هاتف"
 #: templates/followups_list.html:42
 msgid "No follow-ups to show."
 msgstr "لا توجد متابعات لعرضها."
+
+#: templates/grooming_list.html:4
+#, python-format
+msgid ""
+"Ongoing grooming requests logged as part of a visit. %(total_count)s "
+"shown."
+msgstr ""
 
 #: templates/grooming_list.html:8
 msgid "In Progress"
@@ -2973,6 +3161,11 @@ msgstr "آخر ٣ أيام"
 msgid "No updates logged yet."
 msgstr "لا توجد تحديثات مسجلة بعد."
 
+#: templates/inpatient_detail.html:80
+#, python-format
+msgid "View Full Daily Log History (%(updates)s entries)"
+msgstr "عرض سجل التحديثات اليومية الكامل (%(updates)s سجل)"
+
 #: templates/inpatient_detail.html:83
 msgid "Earlier Entries"
 msgstr "السجلات الأقدم"
@@ -2988,6 +3181,11 @@ msgstr "تسجيل محاولة تواصل"
 #: templates/inpatient_detail.html:121
 msgid "No contact attempts logged yet."
 msgstr "لا توجد محاولات تواصل مسجلة بعد."
+
+#: templates/inpatient_detail.html:123
+#, python-format
+msgid "View all %(contacts)s contact attempts"
+msgstr "عرض جميع محاولات التواصل (%(contacts)s)"
 
 #: templates/inpatient_detail.html:134
 msgid "Add Procedure to Bill"
@@ -3009,6 +3207,12 @@ msgstr "الفاتورة حتى الآن"
 msgid "No procedures billed yet."
 msgstr "لم تتم فوترة أي إجراءات بعد."
 
+#: templates/inpatient_detail.html:161 templates/pos.html:21
+#: templates/visit_detail.html:125
+#, python-format
+msgid "Discount %% (Max %(discount_cap)s%%)"
+msgstr "الخصم ٪ (بحد أقصى %(discount_cap)s٪)"
+
 #: templates/inpatient_detail.html:162 templates/visit_detail.html:126
 msgid "Apply"
 msgstr "تطبيق"
@@ -3022,6 +3226,11 @@ msgstr "الإجمالي"
 #: templates/inpatient_detail.html:165 templates/visit_detail.html:130
 msgid "Clean Up applied"
 msgstr "تم تطبيق الإعفاء عن الفئات القليلة"
+
+#: templates/inpatient_detail.html:170 templates/visit_detail.html:136
+#, python-format
+msgid "Record Payment (%(currency_label)s)"
+msgstr "تسجيل دفعة (%(currency_label)s)"
 
 #: templates/inpatient_detail.html:180 templates/visit_detail.html:146
 msgid "Add"
@@ -3072,13 +3281,28 @@ msgstr "تاريخ التنويم"
 msgid "Admit"
 msgstr "تنويم"
 
+#: templates/insights.html:5
+#, python-format
+msgid "Management-level view over the last %(months_back)s months. Admin only."
+msgstr "عرض إداري لآخر %(months_back)s شهرًا. للإدارة فقط."
+
 #: templates/insights.html:7
 msgid "Retention →"
 msgstr "ولاء العملاء →"
 
+#: templates/insights.html:12
+#, python-format
+msgid "Revenue, Last %(months_back)s Months (%(currency_label)s)"
+msgstr "الإيرادات، آخر %(months_back)s شهرًا (%(currency_label)s)"
+
 #: templates/insights.html:13
 msgid "Clients With Paid Visits (Lifetime)"
 msgstr "العملاء ذوو زيارات مدفوعة (الإجمالي)"
+
+#: templates/insights.html:14
+#, python-format
+msgid "Avg. Lifetime Spend / Client (%(currency_label)s)"
+msgstr "متوسط إجمالي الإنفاق لكل عميل (%(currency_label)s)"
 
 #: templates/insights.html:15
 msgid "Vets Billing This Window"
@@ -3088,13 +3312,35 @@ msgstr "الأطباء الذين فوتروا في هذه الفترة"
 msgid "Revenue by Service Category"
 msgstr "الإيرادات حسب فئة الخدمة"
 
+#: templates/insights.html:21
+#, python-format
+msgid "Net of refunds, per month, in %(currency_label)s."
+msgstr "صافي بعد المرتجعات، شهريًا، بـ %(currency_label)s."
+
 #: templates/insights.html:25
 msgid "Payment Method Mix"
 msgstr "توزيع طرق الدفع"
 
+#: templates/insights.html:26
+#, python-format
+msgid ""
+"Cash vs. card, last %(months_back)s months — a useful trust/adoption "
+"signal for a new clinic."
+msgstr ""
+
+#: templates/insights.html:31
+#, python-format
+msgid "Revenue by Category — Monthly Breakdown (%(currency_label)s)"
+msgstr "الإيرادات حسب الفئة — التفصيل الشهري (%(currency_label)s)"
+
 #: templates/insights.html:60
 msgid "Vet Performance"
 msgstr "أداء الأطباء"
+
+#: templates/insights.html:61
+#, python-format
+msgid "Visit count & billings generated, last %(months_back)s months."
+msgstr "عدد الزيارات والفواتير الناتجة، آخر %(months_back)s شهرًا."
 
 #: templates/insights.html:64
 msgid "Vet"
@@ -3114,13 +3360,18 @@ msgstr "أفضل العملاء حسب إجمالي الإنفاق"
 
 #: templates/insights.html:83
 msgid ""
-"From visit, inpatient &amp; boarding payments (walk-in POS retail sales "
+"From visit, inpatient & boarding payments (walk-in POS retail sales "
 "aren't linked to a client in this system)."
 msgstr ""
 
 #: templates/insights.html:86
 msgid "Payments"
 msgstr "الدفعات"
+
+#: templates/insights.html:86
+#, python-format
+msgid "Total Paid (%(currency_label)s)"
+msgstr "إجمالي المدفوع (%(currency_label)s)"
 
 #: templates/insights.html:95
 msgid "No payments on file yet."
@@ -3488,17 +3739,37 @@ msgstr "ملاحظة العمر / تاريخ الميلاد"
 msgid "Microchip"
 msgstr "الشريحة"
 
+#: templates/patient_detail.html:30
+#, python-format
+msgid "Inpatient Stays (%(cases)s)"
+msgstr "فترات التنويم (%(cases)s)"
+
 #: templates/patient_detail.html:33
 msgid "Discharged"
 msgstr "تم الإخراج"
+
+#: templates/patient_detail.html:47
+#, python-format
+msgid "Boarding Sessions (%(boarding_sessions)s)"
+msgstr "فترات الإيواء (%(boarding_sessions)s)"
 
 #: templates/patient_detail.html:53
 msgid "Open Boarding"
 msgstr "فتح إيواء"
 
+#: templates/patient_detail.html:66
+#, python-format
+msgid "Grooming Sessions (%(grooming_sessions)s)"
+msgstr "جلسات العناية والتصفيف (%(grooming_sessions)s)"
+
 #: templates/patient_detail.html:69 templates/visit_detail.html:85
 msgid "Services"
 msgstr "الخدمات"
+
+#: templates/patient_detail.html:83
+#, python-format
+msgid "Visit History (%(visits)s)"
+msgstr "سجل الزيارات (%(visits)s)"
 
 #: templates/patient_detail.html:86 templates/visit_detail.html:61
 #: templates/visit_form_edit.html:27
@@ -3520,6 +3791,11 @@ msgstr "الحالة التناسلية"
 #: templates/patient_form_edit.html:24 templates/visit_new_patient.html:28
 msgid "Microchip Number (optional)"
 msgstr "رقم الشريحة (اختياري)"
+
+#: templates/patient_history.html:6
+#, python-format
+msgid "%(patient)s — Full History"
+msgstr "%(patient)s — السجل الكامل"
 
 #: templates/patient_history.html:7
 msgid "Back to Patient"
@@ -3569,6 +3845,11 @@ msgstr "عملية البيع الحالية"
 msgid "Cart is empty."
 msgstr "السلة فارغة."
 
+#: templates/pos.html:37
+#, python-format
+msgid "Cash Received (%(currency_label)s)"
+msgstr "النقد المستلم (%(currency_label)s)"
+
 #: templates/pos.html:40 templates/pos_receipt.html:18
 msgid "Change Due"
 msgstr "الباقي"
@@ -3598,6 +3879,11 @@ msgid ""
 "Highlighted rows: Retail item doesn't match an active Retail item in "
 "Inventory Catalog — check the linked item."
 msgstr ""
+
+#: templates/price_list.html:40
+#, python-format
+msgid "Sale Price (%(currency_label)s)"
+msgstr "سعر البيع (%(currency_label)s)"
 
 #: templates/price_list.html:41
 msgid "Linked Inventory Item (Retail Only — for POS)"
@@ -3714,6 +4000,11 @@ msgid ""
 "Register instead."
 msgstr ""
 
+#: templates/refunds.html:60
+#, python-format
+msgid "Refund Amount (%(currency_label)s)"
+msgstr "مبلغ الاسترداد (%(currency_label)s)"
+
 #: templates/refunds.html:68
 msgid "Visit ID"
 msgstr "رقم الزيارة"
@@ -3743,6 +4034,11 @@ msgstr "تنفيذ استرداد خدمة"
 msgid "Recent Refunds"
 msgstr "المرتجعات الأخيرة"
 
+#: templates/refunds.html:87
+#, python-format
+msgid "Showing refunds on %(date_filter)s only."
+msgstr "عرض المرتجعات في %(date_filter)s فقط."
+
 #: templates/refunds.html:93
 msgid "Details"
 msgstr "التفاصيل"
@@ -3771,9 +4067,16 @@ msgstr "لم يُعد للمخزون"
 msgid "Service"
 msgstr "خدمة"
 
+#: templates/refunds.html:117
+#, python-format
+msgid "Clean Up on original bill: %(r)s %(currency_label)s"
+msgstr "الإعفاء عن الفئات القليلة على الفاتورة الأصلية: %(r)s %(currency_label)s"
+
 #: templates/reports.html:5
 msgid "Revenue from billing & retail sales, COGS from measured usage. Admin only."
 msgstr "الإيرادات من الفوترة ومبيعات التجزئة، وتكلفة البضاعة من الاستهلاك المقاس. للإدارة فقط."
+"الإيرادات من الفوترة ومبيعات التجزئة، وتكلفة البضاعة من الاستهلاك المقاس."
+" للإدارة فقط."
 
 #: templates/reports.html:9 templates/reports_yearly.html:9
 msgid ""
@@ -3821,9 +4124,26 @@ msgstr "التغير الشهري"
 msgid "Enter Operating Costs for a Month"
 msgstr "أدخل التكاليف التشغيلية لشهر"
 
+#: templates/reports.html:48
+#, python-format
+msgid "Salaries / Payroll (%(currency_label)s)"
+msgstr "الرواتب / الأجور (%(currency_label)s)"
+
+#: templates/reports.html:51
+#, python-format
+msgid "Other OpEx (%(currency_label)s)"
+msgstr "مصاريف تشغيلية أخرى (%(currency_label)s)"
+
 #: templates/reports.html:54
 msgid "Save Operating Costs"
 msgstr "حفظ التكاليف التشغيلية"
+
+#: templates/reports_yearly.html:5
+#, python-format
+msgid ""
+"Same figures as Monthly P&L, rolled up by year. %(total_count)s year(s) "
+"shown."
+msgstr ""
 
 #: templates/reports_yearly.html:11
 msgid "← Monthly P&L"
@@ -4194,6 +4514,11 @@ msgstr "التحديثات"
 msgid "Current Version"
 msgstr "الإصدار الحالي"
 
+#: templates/settings.html:205
+#, python-format
+msgid "VetClinicSystem IQ v%(app_version)s"
+msgstr "VetClinicSystem IQ الإصدار %(app_version)s"
+
 #: templates/settings.html:207
 msgid "Check for Updates"
 msgstr "التحقق من التحديثات"
@@ -4327,6 +4652,11 @@ msgstr "سجل التحديثات"
 #: templates/visit_detail.html:33
 msgid "Additional Tests / X-Rays"
 msgstr "فحوصات إضافية / أشعة"
+
+#: templates/visit_detail.html:34
+#, python-format
+msgid "(%(files)s file(s) on record)"
+msgstr "(%(files)s ملف مسجل)"
 
 #: templates/visit_detail.html:53
 msgid "Close"
@@ -4488,6 +4818,13 @@ msgstr "لا توجد زيارات مطابقة."
 msgid "Wellness Reminders"
 msgstr "تذكيرات الرعاية الوقائية"
 
+#: templates/wellness_list.html:5
+#, python-format
+msgid ""
+"Reminders start 5 days before the next dose date. Flagged for admin if 2+"
+" weeks overdue and uncontacted. %(total_count)s shown."
+msgstr ""
+
 #: templates/wellness_list.html:10
 msgid "Remind From"
 msgstr "التذكير اعتبارًا من"
@@ -4565,5 +4902,37 @@ msgstr "لا توجد تذكيرات رعاية وقائية مسجلة."
 #~ msgstr ""
 
 #~ msgid "← Monthly P&amp;L"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "The Role dropdown always reflects "
+#~ "whatever roles exist in the Roles "
+#~ "&amp; Permissions tab. A per-user "
+#~ "discount override (set at creation, in"
+#~ " the New User form) shows here "
+#~ "as \"Custom\" — most staff just "
+#~ "inherit their role's limit."
+#~ msgstr ""
+
+#~ msgid ""
+#~ "No role is currently marked \"Can "
+#~ "be assigned as a vet,\" so there's"
+#~ " nothing to schedule against below. "
+#~ "Turn it on for at least one "
+#~ "role in Users &amp; Roles →"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "This month's operating costs haven't "
+#~ "been entered yet — add them on "
+#~ "the Monthly P&amp;L page before the "
+#~ "month closes."
+#~ msgstr ""
+
+#~ msgid ""
+#~ "From visit, inpatient &amp; boarding "
+#~ "payments (walk-in POS retail sales "
+#~ "aren't linked to a client in this"
+#~ " system)."
 #~ msgstr ""
 
