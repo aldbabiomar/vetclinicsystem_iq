@@ -471,16 +471,10 @@ def compute_bill_totals(subtotal, discount_percent, paid, cleanup_amount=0):
     """
     discount_percent = discount_percent or 0
     raw_total = subtotal * (1 - discount_percent / 100)
-    total = money.round_to_denomination(raw_total)
-    # Never let rounding present a genuinely non-zero bill as "free" — but
-    # a 100% discount is an intentional waiver, not a rounding accident,
-    # so it's exempt from this floor. <= 125, not < 125: round_to_denomination()
-    # itself now correctly rounds exactly-125 up to 250 (true half-up), so
-    # this only ever actually fires below 125 in practice — the <= is just
-    # not leaving a gap at the boundary for this guard to depend on
-    # round_to_denomination's internals to stay correct.
-    if 0 < raw_total <= 125 and discount_percent < 100:
-        total = money.SMALLEST_NOTE
+    # Rounds to the note and applies the anti-"looks free" floor (and its
+    # 100%-discount exemption). The floor used to be written out here, which
+    # is exactly why pos_checkout() went without one — see money.payable_total().
+    total = money.payable_total(raw_total, discount_percent)
     total = max(total - (cleanup_amount or 0), 0)
     paid = round(paid or 0, 2)
     balance = money.round_to_denomination(total - paid)

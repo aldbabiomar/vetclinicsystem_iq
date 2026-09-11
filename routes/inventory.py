@@ -865,16 +865,32 @@ def _save_audit_lines(db, session_id):
         expiry = request.form.get(f"expiry_{iid}", "").strip()
         notes = request.form.get(f"notes_{iid}", "").strip()
 
+        # parse_money(), not float(). float() accepts "nan"/"inf" without
+        # raising, and a NaN count did not merely store badly: it was
+        # confirmable, and every downstream bound check silently passed it.
+        # `qty > current_stock` is False against NaN, so the POS oversell
+        # guard let an empty shelf sell without limit. parse_money() is the
+        # guard that already rejects non-finite input everywhere else in the
+        # app -- this was the one numeric entry point not using it.
+        # has_negative() covers the other half: a count of -5 is not a
+        # physical quantity, and it propagates into Inventory Status and the
+        # Ordering Sheet.
         try:
-            vals = (
-                float(stock), float(received),
-                float(threshold) if threshold else None,
-                (1 if critical == "Y" else (0 if critical == "N" else None)),
-                float(target) if target else None,
-                expiry or None, notes or None,
-            )
-        except ValueError:
+            stock_v = parse_money(stock, required=True)
+            received_v = parse_money(received)
+            threshold_v = parse_money(threshold) if threshold else None
+            target_v = parse_money(target) if target else None
+        except BadNumber:
             raise BadNumber(iid)
+        if has_negative(stock_v, received_v, threshold_v, target_v):
+            raise BadNumber(iid)
+        vals = (
+            stock_v, received_v if received_v is not None else 0,
+            threshold_v,
+            (1 if critical == "Y" else (0 if critical == "N" else None)),
+            target_v,
+            expiry or None, notes or None,
+        )
         # INSERT ... ON CONFLICT DO UPDATE instead of the old
         # check-then-insert. The old pattern had a race window where two
         # concurrent saves for the same session+item could both see "no

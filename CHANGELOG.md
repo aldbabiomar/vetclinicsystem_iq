@@ -3,6 +3,37 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.14.0] - 2026-09-11
+
+### Fixed
+- **A small till sale is no longer rung up as free.** Anything whose price
+  came to less than 125 IQD was recorded as costing 0 — the goods left the
+  shop, and if cash tendered had been entered, the till was told to hand back
+  every dinar of it. Small sales are now charged at 250 IQD, the smallest
+  note, exactly as a visit bill has always handled them. A 100% discount is
+  still free, as intended.
+- **A refund of a small item no longer pays out nothing.** Returning an item
+  worth less than one note recorded a refund of 0: the item came back and was
+  restocked, but no money was given to the customer. Such a refund now pays
+  the smallest note, never more than the sale actually collected.
+- **A stock count can no longer be saved as a nonsense number.** "nan",
+  "infinity" and negative counts were accepted and could be confirmed into a
+  locked audit. A count like that silently switched off the "not enough in
+  stock" check, so the till would sell an item with an empty shelf. Counts
+  must now be a real number of zero or more.
+- **The appointment book no longer errors when the date filter is cleared.**
+  Emptying the date box produced a server error page instead of returning to
+  today.
+- **An inpatient case can no longer be discharged before it was admitted.** A
+  mistyped year recorded a stay of negative length, which fed length-of-stay
+  figures and the case's billing period. Boarding already refused this.
+
+### Changed
+- **A cash-drawer count that comes out over or short now shows in amber, not
+  red.** The count was always saved, but it was reported in the same red as a
+  failure, so staff re-ran counts that had already been recorded. A genuine
+  failure is still red.
+
 ## [1.13.0] - 2026-09-11
 
 ### Added
