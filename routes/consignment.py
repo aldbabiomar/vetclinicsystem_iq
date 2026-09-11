@@ -659,8 +659,25 @@ def consignment_returns_new():
 def consignment_sales_page():
     db = get_db()
     distributor_id = request.args.get("distributor_id") or None
-    date_from = request.args.get("date_from") or None
-    date_to = request.args.get("date_to") or None
+    # Validated like every other date-filtered list page. These went straight
+    # into the query: a malformed date silently narrowed the report to nothing
+    # with no warning, which reads as "this distributor sold nothing in that
+    # period" rather than "that filter was not understood". Same shape as the
+    # /admin/logs finding. See SEAM_RULES.md.
+    date_from, date_to = request.args.get("date_from"), request.args.get("date_to")
+    for label, value in (("date_from", date_from), ("date_to", date_to)):
+        if value:
+            try:
+                if logic.parse_date(value) is None:
+                    raise ValueError(value)
+            except ValueError:
+                flash("That date wasn't valid — showing all dates instead.", "error")
+                if label == "date_from":
+                    date_from = None
+                else:
+                    date_to = None
+    date_from = date_from or None
+    date_to = date_to or None
     all_rows = logic.consignment_sales_by_distributor(db, distributor_id, date_from, date_to)
     page = get_page()
     total = len(all_rows)

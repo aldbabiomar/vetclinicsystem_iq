@@ -1043,6 +1043,21 @@ def visit_discount_save(visit_id):
     if error:
         flash(error, "error")
         return redisplay()
+    # Locked before the non-discountable check below and before the write.
+    # visit_billing_save() has always taken this same row FOR UPDATE, and its
+    # comment says the lock is there "so a concurrent discount save on the
+    # same visit serialises behind this one" -- but a lock only serialises if
+    # BOTH sides take it, and this route never did. The two guards that stop a
+    # discount landing on a non-discountable line were therefore validating
+    # against snapshots the other had already invalidated, and because the two
+    # paths took their locks in different orders they also deadlocked outright
+    # under concurrent edits. Reproduced live: 2/25 trials ended with a
+    # discounted bill carrying a non-discountable line, plus 46
+    # DeadlockDetected 500s. JO has locked all four of these routes from the
+    # start. See SEAM_RULES.md and SIMULATION_AUDIT_2026-09-11.md.
+    if not db.execute("SELECT id FROM visits WHERE id=? FOR UPDATE", (visit_id,)).fetchone():
+        flash("Visit not found.", "error")
+        return redirect(url_for("clinical.visits_list"))
     if percent > 0:
         summary = logic.visit_billing_summary(db, visit_id)
         blocked = logic.non_discountable_line_names(db, [l["id"] for l in summary["lines"]])
@@ -1906,6 +1921,12 @@ def inpatient_contact_add(case_id):
 def inpatient_billing_add(case_id):
     db = get_db()
     price_ids = request.form.getlist("price_id")
+    # Locked for the same reason inpatient_discount_save() locks it -- the two
+    # routes must take this row in the same order or they interleave (and,
+    # having previously taken it in different orders, deadlocked).
+    if not db.execute("SELECT id FROM inpatient_cases WHERE id=? FOR UPDATE", (case_id,)).fetchone():
+        flash("Inpatient case not found.", "error")
+        return redirect(url_for("clinical.inpatient_list"))
     # inpatient_discount_save() only checks non-discountable items against
     # whatever's on the bill *at the moment a discount is applied* — same
     # gap visit_billing_save() already closes on its own side. Without
@@ -2020,6 +2041,12 @@ def inpatient_discount_save(case_id):
     if error:
         flash(error, "error")
         return redisplay()
+    # Same mutex as visit_discount_save(), for the same reason -- see the
+    # comment there. A pure lock against a concurrent inpatient_billing_add()
+    # on this case; nothing about the inpatient_cases row itself changes here.
+    if not db.execute("SELECT id FROM inpatient_cases WHERE id=? FOR UPDATE", (case_id,)).fetchone():
+        flash("Inpatient case not found.", "error")
+        return redirect(url_for("clinical.inpatient_list"))
     if percent > 0:
         price_ids = [r["price_id"] for r in db.execute(
             "SELECT DISTINCT price_id FROM inpatient_billing WHERE case_id=?", (case_id,)

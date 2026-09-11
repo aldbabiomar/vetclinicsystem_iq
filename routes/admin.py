@@ -384,7 +384,22 @@ def admin_role_delete(role_id):
 @auth.permission_required("view_logins_changes")
 def admin_logs():
     db = get_db()
-    day = request.args.get("date", date.today().isoformat())
+    # Validated, like every other date-filtered list page in this app. This
+    # one took the raw value: `?date=` (present but empty) or `?date=garbage`
+    # reached changes_on_date()/logins_on_date(), which compare it as a text
+    # timestamp prefix, so nothing matched and the page rendered an EMPTY log
+    # with no explanation -- indistinguishable from "nobody did anything that
+    # day", on the one screen whose whole job is showing what happened. Four
+    # sibling pages already warned; this was the fifth. `or` rather than a
+    # get() default because the default only applies when the parameter is
+    # absent, not when it is present and empty. See SEAM_RULES.md.
+    day = request.args.get("date") or date.today().isoformat()
+    try:
+        if logic.parse_date(day) is None:
+            raise ValueError(day)
+    except ValueError:
+        flash("That date wasn't valid — showing today instead.", "error")
+        day = date.today().isoformat()
     changes = logic.changes_on_date(db, day)
     logins = logic.logins_on_date(db, day)
     return render_template("admin_logs.html", day=day, today=date.today().isoformat(), changes=changes, logins=logins)
