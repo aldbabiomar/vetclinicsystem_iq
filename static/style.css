@@ -1227,3 +1227,16 @@ h3 { letter-spacing: -0.006em; }
 html[dir="rtl"] .icon-chevron,
 html[dir="rtl"] .chevron { transform: scaleX(-1); }
 html[dir="rtl"] .vz-toast-stack { left: 16px; right: auto; }
+
+/* Arabic is cursive: a break between two letters severs the joined
+   letterforms, so `overflow-wrap: anywhere` — correct in English, where it
+   keeps a raw error message inside its pill — renders نجح as نج / ح on two
+   lines. `anywhere` also drops min-content width to a single character, so
+   the column collapses first and then the word has to break to fit.
+   `break-word` still breaks a token that cannot fit a line on its own, which
+   is what the English rule is for; it just will not break a word that could
+   stay whole. English is deliberately left exactly as it was. */
+html[dir="rtl"] .badge,
+html[dir="rtl"] .flash,
+html[dir="rtl"] .form-error-note,
+html[dir="rtl"] .detail-item .v { overflow-wrap: break-word; }
