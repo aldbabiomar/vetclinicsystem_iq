@@ -3,6 +3,16 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.16.2] - 2026-09-12
+
+### Fixed
+- **The progress bar reads Arabic.** The step names during an update, a backup,
+  a restore or a rebuild ("Validating release", "Restoring database") were
+  still in English — on the one screen you watch most closely while waiting.
+- **"Ordering Sheet" is now كشف النواقص** in Arabic, everywhere it appears.
+- A restart that finished without a message showed the word "undefined" on the
+  progress panel instead of saying it was done.
+
 ## [1.16.1] - 2026-09-12
 
 ### Fixed
