@@ -3,6 +3,20 @@
 All notable changes to VetClinicSystem IQ are documented in this file, in
 [Keep a Changelog](https://keepachangelog.com) style.
 
+## [1.16.3] - 2026-09-12
+
+### Fixed
+- **The health-check warning now stays on screen until you answer it.** It was
+  appearing for a fraction of a second and vanishing — not long enough to read
+  what it said. It was never really being shown: the window was drawn
+  completely transparent. It now appears properly and waits for either "Open
+  Settings" or "Not now"; clicking the background no longer dismisses it,
+  because it is telling you something that needs an answer.
+- **Arabic status words are no longer split across two lines.** "نجح" in the
+  backup list was being broken between its letters. Arabic joins up, so a
+  break inside a word is never correct. English is unchanged.
+- In Arabic, "Slot Length" in Settings now reads مدة الموعد.
+
 ## [1.16.2] - 2026-09-12
 
 ### Fixed
