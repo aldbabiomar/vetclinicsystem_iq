@@ -124,8 +124,12 @@ def test_both_money_paths_agree_at_every_boundary():
     must produce the same payable figure for the same subtotal. They diverged
     because the floor was written inline in one of them."""
     for subtotal in (1, 10, 50, 100, 124, 125, 126, 200, 250, 375, 500, 10000):
-        bill_total, _, _, _ = logic.compute_bill_totals(subtotal, 0, 0)
-        pos_total = money.payable_total(subtotal * (1 - 0 / 100), 0)
+        bill_total, _, _, _, _ = logic.compute_bill_totals(
+            subtotal, 0, 0, discountable_subtotal=subtotal)
+        # Mirrors pos_checkout(), which now reaches the same figure through
+        # logic.discounted_raw_total() rather than writing the formula out.
+        pos_total = money.payable_total(
+            logic.discounted_raw_total(subtotal, subtotal, 0), 0)
         assert bill_total == pos_total, (
             f"subtotal {subtotal}: bill path says {bill_total}, POS says {pos_total}")
 

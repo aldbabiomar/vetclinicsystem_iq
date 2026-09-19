@@ -198,16 +198,36 @@ def test_fmt_money_uses_thousands_separator_and_no_decimals():
 
 # ---------------------------------------------------------------------------
 # compute_bill_totals — the single shared entry point for every bill in
-# the app (visits, inpatient, boarding). Returns (total, paid, balance, status).
+# the app (visits, inpatient, boarding).
 # ---------------------------------------------------------------------------
 
+def _totals(subtotal, discount_percent, paid, cleanup_amount=0, *,
+            discountable_subtotal=None):
+    """compute_bill_totals() with discountable_subtotal defaulting to the
+    WHOLE subtotal — i.e. the only case that existed before the rewards card,
+    which is what every test below asserts.
+
+    The real function deliberately has no such default (a caller that forgot
+    it would silently discount a non-discountable line — see its docstring
+    and seam rule 6); this wrapper is test-local, passes the value
+    explicitly, and drops the new pre_cleanup_total so these tests keep
+    reading against the 4-tuple they were written for. That the real
+    signature REFUSES a missing discountable_subtotal is asserted separately,
+    in test_seam_rules.py."""
+    total, paid_, balance, status, _pre_cleanup = logic.compute_bill_totals(
+        subtotal, discount_percent, paid, cleanup_amount,
+        discountable_subtotal=(subtotal if discountable_subtotal is None
+                               else discountable_subtotal))
+    return total, paid_, balance, status
+
+
 def test_bill_unpaid():
-    total, paid, balance, status = logic.compute_bill_totals(10_000, 0, 0)
+    total, paid, balance, status = _totals(10_000, 0, 0)
     assert (total, paid, balance, status) == (10_000, 0, 10_000, "Unpaid")
 
 
 def test_bill_applies_percentage_discount():
-    total, _, balance, _ = logic.compute_bill_totals(10_000, 10, 0)
+    total, _, balance, _ = _totals(10_000, 10, 0)
     assert total == 9_000
     assert balance == 9_000
 
@@ -215,7 +235,7 @@ def test_bill_applies_percentage_discount():
 def test_bill_full_waiver_is_free_and_not_floored():
     """A 100% discount is an intentional waiver, not a rounding accident, so
     it is explicitly exempt from the anti-"looks free" floor below."""
-    total, _, _, status = logic.compute_bill_totals(10_000, 100, 0)
+    total, _, _, status = _totals(10_000, 100, 0)
     assert total == 0
     assert status == "N/A"
 
@@ -224,19 +244,19 @@ def test_bill_full_waiver_is_free_and_not_floored():
 def test_bill_never_presents_a_real_charge_as_free(subtotal):
     """Anything owed but under half a note would otherwise round to 0 and
     print as a free bill. The floor lifts it to one note instead."""
-    total, _, _, status = logic.compute_bill_totals(subtotal, 0, 0)
+    total, _, _, status = _totals(subtotal, 0, 0)
     assert total == money.SMALLEST_NOTE
     assert status == "Unpaid"
 
 
 def test_bill_fully_paid():
-    _, _, balance, status = logic.compute_bill_totals(10_000, 0, 10_000)
+    _, _, balance, status = _totals(10_000, 0, 10_000)
     assert balance == 0
     assert status == "Fully Paid"
 
 
 def test_bill_partially_paid():
-    _, _, balance, status = logic.compute_bill_totals(10_000, 0, 5_000)
+    _, _, balance, status = _totals(10_000, 0, 5_000)
     assert balance == 5_000
     assert status == "Partially Paid"
 
@@ -244,20 +264,20 @@ def test_bill_partially_paid():
 def test_bill_overpayment_reads_as_paid_with_negative_balance():
     """A negative balance is money owed back to the client, not a bug — the
     Refunds module is what settles it. Status must not read "Partially Paid"."""
-    _, _, balance, status = logic.compute_bill_totals(10_000, 0, 10_250)
+    _, _, balance, status = _totals(10_000, 0, 10_250)
     assert balance == -250
     assert status == "Fully Paid"
 
 
 def test_cleanup_writes_off_after_rounding():
-    total, _, _, _ = logic.compute_bill_totals(10_000, 0, 0, cleanup_amount=1_000)
+    total, _, _, _ = _totals(10_000, 0, 0, cleanup_amount=1_000)
     assert total == 9_000
 
 
 def test_cleanup_cannot_drive_a_bill_negative():
     """A write-off larger than the bill clamps at zero — it must never turn
     into the clinic owing the client money."""
-    total, _, _, status = logic.compute_bill_totals(500, 0, 0, cleanup_amount=1_000)
+    total, _, _, status = _totals(500, 0, 0, cleanup_amount=1_000)
     assert total == 0
     assert status == "N/A"
 
@@ -266,7 +286,7 @@ def test_discount_and_cleanup_apply_in_that_order():
     """Discount is a percentage of the subtotal; Clean Up is a flat amount
     off what remains. Reversing them would make the write-off itself
     discountable and quietly change what the client pays."""
-    total, _, _, _ = logic.compute_bill_totals(10_000, 10, 0, cleanup_amount=1_000)
+    total, _, _, _ = _totals(10_000, 10, 0, cleanup_amount=1_000)
     assert total == 8_000          # 10000 -10% = 9000, then -1000
     assert total != (10_000 - 1_000) * 0.9
 
@@ -287,7 +307,7 @@ def test_cleanup_cap_is_a_flat_global_constant():
 def test_every_payable_figure_lands_on_a_real_note(subtotal, discount):
     """The whole point of the IQD model: a cashier must be able to physically
     hand over the total and the balance. Both must be multiples of 250."""
-    total, _, balance, _ = logic.compute_bill_totals(subtotal, discount, 0)
+    total, _, balance, _ = _totals(subtotal, discount, 0)
     assert total % money.SMALLEST_NOTE == 0
     assert balance % money.SMALLEST_NOTE == 0
 
@@ -295,7 +315,7 @@ def test_every_payable_figure_lands_on_a_real_note(subtotal, discount):
 @pytest.mark.parametrize("subtotal", [0, 250, 10_000])
 @pytest.mark.parametrize("cleanup", [0, 250, 1_000, 99_999])
 def test_total_is_never_negative(subtotal, cleanup):
-    total, _, _, _ = logic.compute_bill_totals(subtotal, 0, 0, cleanup_amount=cleanup)
+    total, _, _, _ = _totals(subtotal, 0, 0, cleanup_amount=cleanup)
     assert total >= 0
 
 
@@ -304,8 +324,8 @@ def test_paying_the_stated_total_always_settles_the_bill(subtotal):
     """Round-trip: whatever total the app shows, paying exactly that must
     read as Fully Paid. Catches any rounding step applied to the total but
     not to the balance (or vice versa)."""
-    total, _, _, _ = logic.compute_bill_totals(subtotal, 0, 0)
-    _, _, balance, status = logic.compute_bill_totals(subtotal, 0, total)
+    total, _, _, _ = _totals(subtotal, 0, 0)
+    _, _, balance, status = _totals(subtotal, 0, total)
     assert status == "Fully Paid"
     assert balance <= 0.5
 
@@ -314,7 +334,7 @@ def test_no_float_dust_survives_into_a_total():
     """0.1 + 0.2 != 0.3 in binary floating point. IQ tolerates float only
     because the 250-rounding step scrubs the dust before anything is stored
     or shown — this proves the scrubbing actually happens."""
-    total, _, _, _ = logic.compute_bill_totals(0.1 + 0.2, 0, 0)
+    total, _, _, _ = _totals(0.1 + 0.2, 0, 0)
     assert total == money.SMALLEST_NOTE
     assert float(total).is_integer()
 
@@ -323,7 +343,7 @@ def test_status_is_always_one_of_the_four_known_values():
     seen = set()
     for subtotal in (0, 125, 10_000):
         for paid in (0, 100, 10_000, 99_999):
-            seen.add(logic.compute_bill_totals(subtotal, 0, paid)[3])
+            seen.add(_totals(subtotal, 0, paid)[3])
     assert seen <= {"N/A", "Unpaid", "Partially Paid", "Fully Paid"}
 
 
@@ -335,7 +355,7 @@ def test_regression_exactly_half_a_note_rounds_up_not_to_free():
     """COMPARISON.md §1.1. Banker's rounding turned a real 125 IQD charge
     into a 0 IQD "free" bill, because 0 is the even multiple."""
     assert money.round_to_denomination(125) != 0
-    assert logic.compute_bill_totals(125, 0, 0)[0] == 250
+    assert _totals(125, 0, 0)[0] == 250
 
 
 def test_regression_parse_date_validates_the_whole_value_not_a_prefix():

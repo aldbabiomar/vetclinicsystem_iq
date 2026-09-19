@@ -312,8 +312,10 @@ def test_manual_bill_total_agrees_with_compute_bill_totals(client, db, visit):
     P&L disagree and neither is obviously wrong."""
     _bill(client, visit["visit_id"], billing_type="Manual", manual_amount="13750")
     row = db.execute("SELECT * FROM billing WHERE visit_id=?", (visit["visit_id"],)).fetchone()
-    expected, _, _, _ = logic.compute_bill_totals(
-        row["manual_amount"], row["discount_percent"], 0, row["cleanup_amount"])
+    expected, _, _, _, _ = logic.compute_bill_totals(
+        row["manual_amount"], row["discount_percent"], 0, row["cleanup_amount"],
+        # A Manual bill is one typed figure and is discountable in full (A4).
+        discountable_subtotal=row["manual_amount"])
     assert row["total"] == expected
 
 
@@ -900,8 +902,9 @@ def test_inpatient_summary_agrees_with_the_shared_arithmetic(client, db, inpatie
                 data={"price_id": priced_service["id"], f"qty_{priced_service['id']}": "3"},
                 follow_redirects=False)
     summary = logic.inpatient_billing_summary(db, inpatient_case["id"])
-    expected, _, _, _ = logic.compute_bill_totals(
-        summary["subtotal"], summary["discount_percent"], 0, summary["cleanup_amount"])
+    expected, _, _, _, _ = logic.compute_bill_totals(
+        summary["subtotal"], summary["discount_percent"], 0, summary["cleanup_amount"],
+        discountable_subtotal=summary["discountable_subtotal"])
     assert summary["total"] == expected
     assert summary["total"] % money.SMALLEST_NOTE == 0
 

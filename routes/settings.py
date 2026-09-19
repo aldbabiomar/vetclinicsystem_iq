@@ -28,7 +28,7 @@ import auth
 import db as dbmod
 import jobs
 import logic
-from core import DATA_DIR as _data_dir, VERSION, get_db, lan_address
+from core import DATA_DIR as _data_dir, VERSION, get_db, lan_address, parse_money, BadNumber
 
 bp = Blueprint("settings", __name__)
 
@@ -186,6 +186,10 @@ def settings_page():
             # account is locked out, so pruning inside that window would
             # silently disarm the lockout.
             "log_retention_days": (logic.LOG_RETENTION_MIN_DAYS, logic.LOG_RETENTION_MAX_DAYS),
+            # How long a newly issued rewards card lasts. Whole months, so
+            # this belongs here (int) -- unlike the RATE below, which is a
+            # percentage and is parsed like every other percentage in the app.
+            "member_term_months": (1, logic.MEMBER_TERM_MONTHS_MAX),
         }
         for key, (lo, hi) in NUMERIC_RANGES.items():
             val = request.form.get(key)
@@ -243,6 +247,22 @@ def settings_page():
                 flash(_("%(title)s must be a valid time (HH:MM).", title=key.replace('_', ' ').title()), "error")
                 return redirect(url_for("settings.settings_page"))
 
+        # The rewards-card rate is a PERCENTAGE, so it goes through
+        # parse_money like the staff discount it sits beside -- not through
+        # NUMERIC_RANGES above, which is int() only and would refuse a
+        # fractional rate that a staff discount already accepts. 0 (the
+        # default) means the programme is off.
+        rate_val = request.form.get("member_discount_percent")
+        if rate_val is not None and rate_val.strip() != "":
+            try:
+                rate = parse_money(rate_val)
+            except BadNumber:
+                flash(_("Member discount must be a valid number."), "error")
+                return redirect(url_for("settings.settings_page"))
+            if rate is None or not 0 <= rate <= logic.MEMBER_RATE_MAX:
+                flash(_("Member discount must be between 0%% and %(max)s%%.", max=logic.MEMBER_RATE_MAX), "error")
+                return redirect(url_for("settings.settings_page"))
+
         start = request.form.get("appt_start_time")
         end = request.form.get("appt_end_time")
         if start and end and start >= end:
@@ -269,7 +289,8 @@ def settings_page():
         for key in ["clinic_name", "clinic_location", "audit_overdue_days", "expiry_soon_days", "opening_date",
                     "appt_start_time", "appt_end_time", "appt_slot_minutes",
                     "backup_dir", "backup_time", "backup_retention", "theme_palette", "language",
-                    "selfcheck_backup_max_age_days", "heartbeat_url", "log_retention_days"]:
+                    "selfcheck_backup_max_age_days", "heartbeat_url", "log_retention_days",
+                    "member_discount_percent", "member_term_months"]:
             val = request.form.get(key)
             if val is not None:
                 old = logic.get_setting(db, key)

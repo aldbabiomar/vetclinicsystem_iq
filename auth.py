@@ -37,6 +37,7 @@ PERMISSIONS = [
     ("manage_grooming", "Manage Grooming", "Patients & Visits"),
     ("manage_boarding", "Manage Boarding", "Patients & Visits"),
     ("manage_appointments", "Manage Appointments", "Patients & Visits"),
+    ("manage_rewards", "Manage Rewards Members", "Patients & Visits"),
     ("manage_inpatient", "Manage Inpatient Cases", "Inpatient"),
     ("view_inventory_status", "View Inventory Status", "Inventory"),
     ("manage_ordering_sheet", "Manage Ordering Sheet", "Inventory"),
@@ -72,6 +73,10 @@ ADMIN_ONLY_TODAY = {
     "view_insights_retention", "manage_users_roles", "manage_settings",
     "manage_maintenance",
     "view_logins_changes",
+    # Issuing and revoking a rewards card decides what a customer pays on
+    # every future bill, so it is admin-only from day one rather than
+    # defaulting open like the rest of this category.
+    "manage_rewards",
     # Settlement is a cash-handling action against a distributor
     # relationship — kept admin-only from day one rather than defaulting
     # it open like everything else non-admin here, unlike view/receiving/

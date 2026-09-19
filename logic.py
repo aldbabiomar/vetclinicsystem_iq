@@ -70,6 +70,162 @@ def int_setting(db, key, default):
         return int(default)
 
 
+# ---------------------------------------------------------------------------
+# Rewards card — membership, the rate, and the term
+# (features/REWARDS_CARD_PLAN.md)
+# ---------------------------------------------------------------------------
+MEMBER_RATE_MAX = 50            # A6 — 0 means the programme is off
+MEMBER_TERM_MONTHS_DEFAULT = 12
+MEMBER_TERM_MONTHS_MAX = 120
+MEMBER_EXPIRING_SOON_DAYS = 30  # when the owner page starts warning
+
+
+def is_active_member(owner):
+    """Does this owner hold a rewards card that is valid TODAY?
+
+    THE one place that answers this. Everything that prices a bill, badges a
+    name or shows the Rewards panel goes through here, so "active member"
+    cannot come to mean two different things in two places.
+
+    Deliberately a read-time comparison and NOT a nightly job that flips
+    is_member: a job that quietly stops running leaves every lapsed card
+    still discounting, and nothing would say so. A comparison cannot stop
+    running. is_member therefore stays TRUE on a lapsed card, which is also
+    what keeps "lapsed" distinguishable from "never joined".
+
+    NULL member_expires_on means the card never expires. The comparison is
+    `>=`, so the card works THROUGH its expiry date — an off-by-one here is a
+    card that dies a day early, which nobody reports as a bug.
+
+    date.today() is naive on purpose, matching the ~83 other date.today() /
+    datetime.now() sites in this app: it runs on the clinic's own PC, so
+    local time IS clinic time. Do not "improve" this to UTC — it would put
+    these two dates one day out of step with every other date in the app.
+    """
+    if owner is None:
+        return False
+    try:
+        if not owner["is_member"]:
+            return False
+        expires = owner["member_expires_on"]
+    except (KeyError, IndexError, TypeError):
+        # A row selected without the membership columns (a narrow SELECT in
+        # some older query) is not evidence of membership.
+        return False
+    if not expires:
+        return True
+    expires = parse_date(expires)
+    if not expires:
+        return True
+    return expires >= date.today()
+
+
+def member_discount_rate(db):
+    """The clinic's rewards-card percentage. 0 means the programme is off.
+
+    Read through here by all four bill-creation sites so they cannot parse
+    the setting four different ways. Float, because this is IQ — JO's copy
+    returns Decimal (COMPARISON.md §1.1); the two must never be swapped.
+
+    A stored value outside the allowed range degrades to 0 (programme off)
+    rather than raising: settings can be written by import_seed.py and by
+    hand, so this fails closed the same way int_setting() does.
+    """
+    try:
+        rate = float(get_setting(db, "member_discount_percent", "0") or 0)
+    except (TypeError, ValueError):
+        return 0
+    if not 0 <= rate <= MEMBER_RATE_MAX:
+        return 0
+    return rate
+
+
+def member_term_months(db):
+    """How long a newly issued card lasts, in whole months."""
+    n = int_setting(db, "member_term_months", MEMBER_TERM_MONTHS_DEFAULT)
+    return n if 1 <= n <= MEMBER_TERM_MONTHS_MAX else MEMBER_TERM_MONTHS_DEFAULT
+
+
+def add_months(d, months):
+    """Calendar-month arithmetic, clamping the day to the target month.
+
+    31 January + 1 month is 28 (or 29) February, not an invalid date — which
+    is what d.replace(month=...) alone would raise on.
+    """
+    y, m = divmod(d.month - 1 + months, 12)
+    y, m = d.year + y, m + 1
+    return d.replace(year=y, month=m, day=min(d.day, calendar.monthrange(y, m)[1]))
+
+
+def member_default_expiry(db, start=None):
+    """What the enroll form pre-fills: today + the clinic's term."""
+    return add_months(start or date.today(), member_term_months(db))
+
+
+def owner_for_patient(db, patient_id):
+    """The owner a patient belongs to — how visits, inpatient and boarding
+    find the customer whose card applies."""
+    return db.execute(
+        "SELECT o.* FROM owners o JOIN patients p ON p.owner_id = o.id WHERE p.id=?",
+        (patient_id,)).fetchone()
+
+
+def member_discount_for(db, owner):
+    """(discount_percent, discount_source) for a bill being created for this
+    owner. ('staff' defaults when there is no active card, or the programme
+    is switched off with a rate of 0.)
+
+    THE one place the card is turned into a discount, called by all four
+    bill-creation sites so they cannot disagree about what "a member" means
+    or read the rate four different ways.
+
+    Note what does NOT happen here: the rate is never checked against
+    auth.discount_cap_for(). That cap exists to bound STAFF discretion, and
+    this is clinic policy rather than a staff decision -- routing it through
+    the cap would stop a receptionist whose cap is below the member rate from
+    creating a member's bill at all. See features/REWARDS_CARD_PLAN.md §6.
+    """
+    if not is_active_member(owner):
+        return 0, "staff"
+    rate = member_discount_rate(db)
+    if rate <= 0:
+        return 0, "staff"
+    return rate, "member"
+
+
+def member_expires_in_days(owner):
+    """Days until this card lapses, or None if it never does / is not a
+    member. Negative once it has lapsed, so a caller can tell the two apart."""
+    if owner is None:
+        return None
+    try:
+        if not owner["is_member"]:
+            return None
+        expires = parse_date(owner["member_expires_on"])
+    except (KeyError, IndexError, TypeError):
+        return None
+    if not expires:
+        return None
+    return (expires - date.today()).days
+
+
+def format_percent(v):
+    """A percentage on its way into display text: 10.0 -> "10", 12.5 -> "12.5".
+
+    discount_percent is DOUBLE PRECISION in IQ and NUMERIC in JO, so a whole
+    percentage arrives as 10.0 / Decimal("10.00") and renders with a
+    meaningless decimal tail on a customer-facing panel. Fractional rates are
+    kept intact — a clinic may legitimately set 12.5%.
+
+    Digits only; Arabic-Indic conversion stays with core.display_number(),
+    which is the one boundary that decides that.
+    """
+    if v is None or v == "":
+        return ""
+    f = float(v)
+    return str(int(f)) if f == int(f) else f"{f:g}"
+
+
 def N_(text):
     """Mark for extraction without translating here — see selfcheck.N_."""
     return text
@@ -466,11 +622,40 @@ def non_discountable_line_names_for_items(db, inventory_item_ids):
     return [r["name"] for r in rows]
 
 
+def discountable_by_item_ids(db, inventory_item_ids):
+    """Discount eligibility per POS cart item, as {inventory_item_id: bool}.
+
+    Same linked_item_id join as non_discountable_line_names_for_items(), but
+    it returns the flag for every id rather than the names of the ineligible
+    ones -- POS needs the value itself, both to price the cart per line and
+    to snapshot it onto each sale_items row.
+
+    Filters active=true to match item_sale_price(), deliberately: eligibility
+    must come from the same price_list row the PRICE came from, or a stale
+    inactive row could discount a line priced from a different one.
+    non_discountable_line_names_for_items() does not filter active; it feeds
+    the staff-discount guard and is left as-is rather than changed underneath
+    that guard. An id with no active linked row is simply absent -- callers
+    treat missing as not discountable, and such an item has no sale price
+    either, so it never reaches a bill.
+    """
+    ids = [i for i in inventory_item_ids if i]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = db.execute(
+        f"SELECT linked_item_id, can_discount FROM price_list "
+        f"WHERE linked_item_id IN ({placeholders}) AND active=true",
+        tuple(ids),
+    ).fetchall()
+    return {r["linked_item_id"]: bool(r["can_discount"]) for r in rows}
+
+
 def save_visit_billing_lines(db, visit_id, lines):
     """
     Replaces every visit_billing_lines row for this visit with a fresh
     snapshot of what's in the cart at Save time — price_id/name/category/
-    quantity/unit_price/unit_cost per line, from the search-and-add
+    quantity/unit_price/unit_cost/discountable per line, from the search-and-add
     billing UI (visit_billing_save() in app.py builds this list). Does
     not commit (caller's job, same convention as every other write in
     this module).
@@ -479,31 +664,76 @@ def save_visit_billing_lines(db, visit_id, lines):
     now_str = datetime.now().isoformat(timespec="seconds")
     for l in lines:
         db.execute(
-            "INSERT INTO visit_billing_lines (visit_id, price_id, name, category, quantity, unit_price, unit_cost, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO visit_billing_lines (visit_id, price_id, name, category, quantity, unit_price, unit_cost, discountable, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (visit_id, l["price_id"], l["name"], l["category"], l["quantity"],
-             l["unit_price"], l["unit_cost"], now_str),
+             l["unit_price"], l["unit_cost"], l["discountable"], now_str),
         )
 
 
-def compute_bill_totals(subtotal, discount_percent, paid, cleanup_amount=0):
+def discounted_raw_total(subtotal, discountable_subtotal, discount_percent):
+    """The bill before rounding: the discount comes off the eligible part of
+    the subtotal only, and the rest is charged in full.
+
+    Lives in one function that BOTH compute_bill_totals() and pos_checkout()
+    call, rather than being written out at each — the anti-"looks free" floor
+    became SEAM_RULES.md F1 precisely because one rule was spelled out inline
+    in those same two places and only one of them kept it. A rule that lives
+    in exactly one place cannot drift.
+
+    On a staff discount `discountable_subtotal == subtotal` always (the
+    guards refuse a staff discount on a bill holding a non-discountable
+    line), so this returns exactly `subtotal * (1 - d)` and nothing about a
+    pre-rewards bill changes.
+    """
+    discount_percent = discount_percent or 0
+    discountable_subtotal = discountable_subtotal or 0
+    return (discountable_subtotal * (1 - discount_percent / 100)
+            + (subtotal - discountable_subtotal))
+
+
+def compute_bill_totals(subtotal, discount_percent, paid, cleanup_amount=0, *,
+                        discountable_subtotal):
     """
     Shared by visit_billing_summary() and inpatient_billing_summary() so the
     money math (total/balance/status) is defined in exactly one place instead
     of being duplicated per billing type.
 
+    `discountable_subtotal` is the part of `subtotal` the discount may
+    actually come off; the remainder is charged in full. It is KEYWORD-ONLY,
+    REQUIRED and has NO DEFAULT, deliberately: a default of `subtotal` would
+    let any caller that forgot it silently treat a non-discountable item as
+    discountable, and a silently wrong total is the one failure this feature
+    cannot afford. Forgetting it is a TypeError instead. See
+    features/REWARDS_CARD_PLAN.md §2.2 and seam rule 6.
+
+    For a STAFF discount the two are always equal — the guards refuse a staff
+    discount on any bill carrying a non-discountable line — so this reduces
+    to the old `subtotal * (1 - d)` and is a behavioural no-op for every bill
+    that predates the rewards card. Only a member's bill can have
+    discountable_subtotal < subtotal.
+
     cleanup_amount is a capped, explicit staff write-off (see
     CLEANUP_FEATURE_PLAN.md) applied AFTER the 250-rounding/anti-"looks
     free" guard below, on top of whatever those already produced — not a
     replacement for either.
+
+    Returns (total, paid, balance, status, pre_cleanup_total). That last one
+    is the rounded payable figure BEFORE Clean Up comes off: receipts print
+    it instead of re-deriving `subtotal * (1 - d)`, which does not match on a
+    bill holding non-discountable lines. Returning it from here rather than
+    letting each receipt recompute is what keeps
+    `subtotal - discount - Clean Up = total` true on every export.
     """
     discount_percent = discount_percent or 0
-    raw_total = subtotal * (1 - discount_percent / 100)
+    raw_total = discounted_raw_total(subtotal, discountable_subtotal, discount_percent)
     # Rounds to the note and applies the anti-"looks free" floor (and its
     # 100%-discount exemption). The floor used to be written out here, which
     # is exactly why pos_checkout() went without one — see money.payable_total().
-    total = money.payable_total(raw_total, discount_percent)
-    total = max(total - (cleanup_amount or 0), 0)
+    # Applied ONCE, to the whole total, never per line: rounding each line to
+    # a note separately would drift the bill away from its own subtotal.
+    pre_cleanup_total = money.payable_total(raw_total, discount_percent)
+    total = max(pre_cleanup_total - (cleanup_amount or 0), 0)
     paid = round(paid or 0, 2)
     balance = money.round_to_denomination(total - paid)
     if total <= 0:
@@ -514,22 +744,27 @@ def compute_bill_totals(subtotal, discount_percent, paid, cleanup_amount=0):
         status = "Fully Paid"
     else:
         status = "Partially Paid"
-    return total, paid, balance, status
+    return total, paid, balance, status, pre_cleanup_total
 
 
 def visit_billing_summary(db, visit_id):
     b = db.execute("SELECT * FROM billing WHERE visit_id=?", (visit_id,)).fetchone()
     if not b:
         return {"billing_type": "Automatic", "lines": [], "subtotal": 0, "discount_percent": 0,
+                "discount_source": "staff", "discountable_subtotal": 0, "pre_cleanup_total": 0,
                 "cleanup_amount": 0, "total": 0, "paid": 0, "balance": 0, "status": "N/A"}
 
     if b["billing_type"] == "Manual":
         lines = [{"id": None, "name": "Veterinary Services", "category": "Service",
-                  "price": b["manual_amount"] or 0}] if b["manual_amount"] else []
+                  "price": b["manual_amount"] or 0, "discountable": True}] if b["manual_amount"] else []
         subtotal = b["manual_amount"] or 0
+        # A Manual bill is one typed figure with no item lines to check, and
+        # staff discounts already applied to the whole of it — so the card
+        # does too. features/REWARDS_CARD_PLAN.md A4.
+        discountable_subtotal = subtotal
     else:
         snapshot_rows = db.execute(
-            "SELECT price_id, name, category, quantity, unit_price FROM visit_billing_lines WHERE visit_id=? ORDER BY id",
+            "SELECT price_id, name, category, quantity, unit_price, discountable FROM visit_billing_lines WHERE visit_id=? ORDER BY id",
             (visit_id,),
         ).fetchall()
         # Priced from the snapshot taken when this bill was saved (via the
@@ -538,16 +773,22 @@ def visit_billing_summary(db, visit_id):
         # exactly (quantity + line_total per line).
         lines = [{"id": r["price_id"], "name": r["name"], "category": r["category"],
                    "price": r["unit_price"], "quantity": r["quantity"],
-                   "line_total": round(r["unit_price"] * r["quantity"], 2)}
+                   "line_total": round(r["unit_price"] * r["quantity"], 2),
+                   "discountable": bool(r["discountable"])}
                   for r in snapshot_rows]
         subtotal = sum(l["line_total"] for l in lines)
+        discountable_subtotal = sum(l["line_total"] for l in lines if l["discountable"])
 
     discount_percent = b["discount_percent"] or 0
     cleanup_amount = b["cleanup_amount"] or 0
     paid_row = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE visit_id=?", (visit_id,)).fetchone()
-    total, paid, balance, status = compute_bill_totals(subtotal, discount_percent, paid_row["s"], cleanup_amount)
+    total, paid, balance, status, pre_cleanup_total = compute_bill_totals(
+        subtotal, discount_percent, paid_row["s"], cleanup_amount,
+        discountable_subtotal=discountable_subtotal)
     return {"billing_type": b["billing_type"], "lines": lines, "subtotal": round(subtotal, 2),
             "discount_percent": discount_percent, "cleanup_amount": cleanup_amount,
+            "discount_source": b["discount_source"], "pre_cleanup_total": pre_cleanup_total,
+            "discountable_subtotal": round(discountable_subtotal, 2),
             "total": total, "paid": paid, "balance": balance, "status": status}
 
 
@@ -570,7 +811,7 @@ def inpatient_billing_summary(db, case_id):
         "JOIN price_list p ON p.id = ib.price_id WHERE ib.case_id=? ORDER BY ib.timestamp",
         (case_id,),
     ).fetchall()
-    lines, subtotal = [], 0
+    lines, subtotal, discountable_subtotal = [], 0, 0
     for r in rows:
         # Prefer the snapshot taken when this line was added (unit_price)
         # — falls back to the live Price List join (p.sale_price) only if
@@ -579,14 +820,22 @@ def inpatient_billing_summary(db, case_id):
         unit_price = r["unit_price"] if r["unit_price"] is not None else (r["sale_price"] or 0)
         line_total = unit_price * r["quantity"]
         subtotal += line_total
+        if r["discountable"]:
+            discountable_subtotal += line_total
         lines.append({"id": r["id"], "name": r["name"], "quantity": r["quantity"],
-                       "unit_price": unit_price, "line_total": round(line_total, 2)})
-    case = db.execute("SELECT discount_percent, cleanup_amount FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
+                       "unit_price": unit_price, "line_total": round(line_total, 2),
+                       "discountable": bool(r["discountable"])})
+    case = db.execute("SELECT discount_percent, discount_source, cleanup_amount FROM inpatient_cases WHERE id=?", (case_id,)).fetchone()
     discount_percent = case["discount_percent"] if case else 0
     cleanup_amount = (case["cleanup_amount"] if case else 0) or 0
     paid_row = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE inpatient_case_id=?", (case_id,)).fetchone()
-    total, paid, balance, status = compute_bill_totals(subtotal, discount_percent, paid_row["s"], cleanup_amount)
+    total, paid, balance, status, pre_cleanup_total = compute_bill_totals(
+        subtotal, discount_percent, paid_row["s"], cleanup_amount,
+        discountable_subtotal=discountable_subtotal)
     return {"lines": lines, "subtotal": round(subtotal, 2), "discount_percent": discount_percent,
+            "discount_source": case["discount_source"] if case else "staff",
+            "discountable_subtotal": round(discountable_subtotal, 2),
+            "pre_cleanup_total": pre_cleanup_total,
             "cleanup_amount": cleanup_amount, "total": total, "paid": paid, "balance": balance, "status": status}
 
 
@@ -624,7 +873,8 @@ def boarding_billing_summary_from_fields(b, paid):
     per-row payments query — see boarding_page() in app.py, which batches
     `paid` across the whole page in one query instead of one per row.
     `b` needs total, total_is_auto, price_per_day, entry_date,
-    dismissal_date, dismissed, cleanup_amount, discount_percent."""
+    dismissal_date, dismissed, cleanup_amount, discount_percent,
+    discount_source."""
     if not b:
         subtotal = 0
     elif b["total_is_auto"] and not b["dismissed"] and b["price_per_day"]:
@@ -641,16 +891,22 @@ def boarding_billing_summary_from_fields(b, paid):
         subtotal = b["total"] or 0
     cleanup_amount = (b["cleanup_amount"] if b else 0) or 0
     discount_percent = (b["discount_percent"] if b else 0) or 0
-    total, paid, balance, status = compute_bill_totals(subtotal, discount_percent, paid, cleanup_amount)
+    # A stay is one amount with no item lines to check, and staff discounts
+    # already applied to the whole of it — so the card does too. A4.
+    total, paid, balance, status, pre_cleanup_total = compute_bill_totals(
+        subtotal, discount_percent, paid, cleanup_amount,
+        discountable_subtotal=subtotal)
     return {"total": total, "paid": paid, "balance": balance, "status": status,
             "cleanup_amount": cleanup_amount, "discount_percent": discount_percent,
+            "discount_source": (b["discount_source"] if b else "staff") or "staff",
+            "discountable_subtotal": subtotal, "pre_cleanup_total": pre_cleanup_total,
             "subtotal": subtotal}
 
 
 def boarding_billing_summary(db, boarding_id):
     b = db.execute(
         "SELECT total, total_is_auto, price_per_day, entry_date, dismissal_date, dismissed, cleanup_amount, "
-        "discount_percent "
+        "discount_percent, discount_source "
         "FROM boarding_sessions WHERE id=?", (boarding_id,)
     ).fetchone()
     paid_row = db.execute("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE boarding_id=?", (boarding_id,)).fetchone()
@@ -1026,6 +1282,8 @@ def _revenue_and_cogs_by_month(db, month=None):
     # billing above.
     case_totals = {r["id"]: (r["total"] or 0) for r in db.execute(
         "SELECT id, total FROM inpatient_cases").fetchall()}
+    case_discount = {r["id"]: (r["discount_percent"] or 0) for r in db.execute(
+        "SELECT id, discount_percent FROM inpatient_cases").fetchall()}
     if month:
         case_ids = [r["case_id"] for r in db.execute(
             "SELECT DISTINCT case_id FROM inpatient_billing WHERE timestamp LIKE ?", (month_like,)
@@ -1034,14 +1292,14 @@ def _revenue_and_cogs_by_month(db, month=None):
         if case_ids:
             placeholders = ",".join("?" * len(case_ids))
             ib_rows = db.execute(
-                f"SELECT ib.case_id, ib.quantity, ib.timestamp, ib.unit_price, ib.unit_cost, "
+                f"SELECT ib.case_id, ib.quantity, ib.timestamp, ib.unit_price, ib.unit_cost, ib.discountable, "
                 f"p.sale_price, p.cost_price FROM inpatient_billing ib "
                 f"JOIN price_list p ON p.id = ib.price_id WHERE ib.case_id IN ({placeholders})",
                 case_ids,
             ).fetchall()
     else:
         ib_rows = db.execute(
-            "SELECT ib.case_id, ib.quantity, ib.timestamp, ib.unit_price, ib.unit_cost, "
+            "SELECT ib.case_id, ib.quantity, ib.timestamp, ib.unit_price, ib.unit_cost, ib.discountable, "
             "p.sale_price, p.cost_price FROM inpatient_billing ib "
             "JOIN price_list p ON p.id = ib.price_id"
         ).fetchall()
@@ -1050,8 +1308,15 @@ def _revenue_and_cogs_by_month(db, month=None):
     for r in ib_rows:
         unit_price = r["unit_price"] if r["unit_price"] is not None else (r["sale_price"] or 0)
         unit_cost = r["unit_cost"] if r["unit_cost"] is not None else (r["cost_price"] or 0)
+        # The weight is the line's DISCOUNTED amount — on a member's case the
+        # card comes off the eligible lines only, so a full-price line is a
+        # larger share of the stay's stored total than a discounted one. With
+        # a staff discount every line carries the same factor and it cancels
+        # in the ratio below, leaving the split exactly as it was.
+        d = case_discount.get(r["case_id"], 0) if r["discountable"] else 0
         lines_by_case[r["case_id"]].append(
-            (r["timestamp"][:7], unit_price * r["quantity"], unit_cost * r["quantity"])
+            (r["timestamp"][:7], unit_price * r["quantity"] * (1 - d / 100),
+             unit_cost * r["quantity"])
         )
 
     for case_id, case_lines in lines_by_case.items():
@@ -1361,15 +1626,27 @@ def revenue_by_category(db, months_back=12):
           -- ~125 IQD. raw_subtotal is computed over ALL of a bill's lines
           -- (not just ones after the cutoff), so the split stays correct
           -- regardless of the reporting window.
+          -- Weighted by each line's DISCOUNTED amount, not its raw amount:
+          -- on a member's bill the card comes off the eligible lines only, so
+          -- a non-discountable line contributes a larger share of the stored
+          -- total than a discounted one of the same list price. On a staff
+          -- discount every line carries the same factor, which cancels in the
+          -- ratio — so this is arithmetically identical to the old split for
+          -- every bill that predates the card.
           SELECT to_char(b.date_billed, 'YYYY-MM') AS month, vbl.category AS category,
                  CASE WHEN raw.raw_subtotal > 0
-                      THEN (vbl.unit_price * vbl.quantity) / raw.raw_subtotal * COALESCE(b.total, 0)
+                      THEN (vbl.unit_price * vbl.quantity
+                            * (1 - CASE WHEN vbl.discountable THEN COALESCE(b.discount_percent,0) ELSE 0 END / 100.0))
+                           / raw.raw_subtotal * COALESCE(b.total, 0)
                       ELSE 0 END AS amount
           FROM billing b
           JOIN visit_billing_lines vbl ON vbl.visit_id = b.visit_id
           JOIN (
-            SELECT visit_id, SUM(unit_price * quantity) AS raw_subtotal
-            FROM visit_billing_lines GROUP BY visit_id
+            SELECT vbl2.visit_id,
+                   SUM(vbl2.unit_price * vbl2.quantity
+                       * (1 - CASE WHEN vbl2.discountable THEN COALESCE(b2.discount_percent,0) ELSE 0 END / 100.0)) AS raw_subtotal
+            FROM visit_billing_lines vbl2 JOIN billing b2 ON b2.visit_id = vbl2.visit_id
+            GROUP BY vbl2.visit_id
           ) raw ON raw.visit_id = b.visit_id
           WHERE b.billing_type = 'Automatic' AND b.date_billed IS NOT NULL
             AND b.date_billed >= ?
@@ -1400,16 +1677,22 @@ def revenue_by_category(db, months_back=12):
           -- logic.refresh_inpatient_total()). raw_subtotal is computed
           -- over ALL of a case's lines regardless of month, so a stay
           -- spanning the reporting cutoff still splits correctly.
+          -- Weighted by the discounted amount, same reasoning as auto_lines.
           SELECT substr(ib.timestamp,1,7) AS month, pl.category AS category,
                  CASE WHEN raw.raw_subtotal > 0
-                      THEN (COALESCE(ib.unit_price, pl.sale_price) * ib.quantity) / raw.raw_subtotal * COALESCE(ic.total, 0)
+                      THEN (COALESCE(ib.unit_price, pl.sale_price) * ib.quantity
+                            * (1 - CASE WHEN ib.discountable THEN COALESCE(ic.discount_percent,0) ELSE 0 END / 100.0))
+                           / raw.raw_subtotal * COALESCE(ic.total, 0)
                       ELSE 0 END AS amount
           FROM inpatient_billing ib
           JOIN price_list pl ON pl.id = ib.price_id
           JOIN inpatient_cases ic ON ic.id = ib.case_id
           JOIN (
-            SELECT ib2.case_id, SUM(COALESCE(ib2.unit_price, pl2.sale_price) * ib2.quantity) AS raw_subtotal
+            SELECT ib2.case_id,
+                   SUM(COALESCE(ib2.unit_price, pl2.sale_price) * ib2.quantity
+                       * (1 - CASE WHEN ib2.discountable THEN COALESCE(ic2.discount_percent,0) ELSE 0 END / 100.0)) AS raw_subtotal
             FROM inpatient_billing ib2 JOIN price_list pl2 ON pl2.id = ib2.price_id
+            JOIN inpatient_cases ic2 ON ic2.id = ib2.case_id
             GROUP BY ib2.case_id
           ) raw ON raw.case_id = ib.case_id
           WHERE ib.timestamp >= ?
@@ -1471,15 +1754,18 @@ def vet_performance(db, months_back=12):
     rows = db.execute(
         """
         WITH visit_totals AS (
-          SELECT b.visit_id, b.billing_type, b.manual_amount, b.discount_percent,
-                 COALESCE(SUM(vbl.unit_price * vbl.quantity),0) AS auto_subtotal
+          SELECT b.visit_id, COALESCE(b.total, 0) AS total
           FROM billing b
-          LEFT JOIN visit_billing_lines vbl ON vbl.visit_id = b.visit_id AND b.billing_type='Automatic'
-          GROUP BY b.visit_id, b.billing_type, b.manual_amount, b.discount_percent
         )
         SELECT v.doctor, COUNT(DISTINCT v.id) AS visit_count,
-               COALESCE(SUM(CASE WHEN vt.billing_type='Manual' THEN vt.manual_amount ELSE vt.auto_subtotal END
-                            * (1-COALESCE(vt.discount_percent,0)/100.0)),0) AS revenue
+               -- The STORED bill total, not a re-derivation. The old
+               -- subtotal*(1-d) already drifted from the receipt (it ignored
+               -- the 250-rounding and Clean Up entirely); a member's bill,
+               -- where the discount comes off the eligible lines only, would
+               -- have widened that silently. billing.total is kept in sync by
+               -- refresh_visit_billing_total() and is what every other report
+               -- reads.
+               COALESCE(SUM(vt.total),0) AS revenue
         FROM visits v
         LEFT JOIN visit_totals vt ON vt.visit_id = v.id
         WHERE v.doctor IS NOT NULL AND v.doctor <> '' AND v.date >= ?
@@ -1499,36 +1785,77 @@ def vet_performance(db, months_back=12):
     return out
 
 
-def client_value(db, limit=20):
+def client_value(db, limit=20, months_back=12):
     """
-    Lifetime spend per owner, from payments linked to that owner's visits,
-    inpatient cases, or boarding stays (POS retail sales are anonymous
-    walk-in transactions in this schema and have no owner link, so they're
-    intentionally excluded from per-client figures).
+    Spend per owner over a TRAILING WINDOW, net of refunds, ranked by value.
+
+    Three deliberate changes from the lifetime version this replaces, all so
+    the list is a good one to pick rewards-card holders from:
+
+    * **A window** (12 months by default). Lifetime spend ranked a client who
+      spent heavily three years ago and never returned above a current
+      regular.
+    * **Refunds subtracted** — service refunds through visit / inpatient /
+      boarding, and retail refunds on owner-linked sales. Money given back
+      was being counted as money earned.
+    * **POS sales included**, where staff identified the customer. That is
+      opt-in at the till, so most sales carry no owner and are simply absent
+      here — this is partial by design, not a bug to "fix" by requiring it.
+
     Returns (top_clients, average_spend_per_active_client, active_client_count).
+    `is_member` on each row is the ACTIVE answer, so a lapsed card does not
+    badge as current.
     """
+    months = month_list(months_back)
+    cutoff = months[0] + "-01"
     rows = db.execute(
         """
-        WITH owner_payments AS (
-          SELECT pa.owner_id, p.amount
+        WITH owner_amounts AS (
+          -- Money in: payments against a visit, an inpatient case or a stay.
+          SELECT pa.owner_id, p.amount AS amount, 1 AS payments
           FROM payments p JOIN visits v ON v.id = p.visit_id JOIN patients pa ON pa.id = v.patient_id
-          WHERE p.visit_id IS NOT NULL
+          WHERE p.visit_id IS NOT NULL AND p.date >= ?::date
           UNION ALL
-          SELECT pa.owner_id, p.amount
+          SELECT pa.owner_id, p.amount, 1
           FROM payments p JOIN inpatient_cases ic ON ic.id = p.inpatient_case_id JOIN patients pa ON pa.id = ic.patient_id
-          WHERE p.inpatient_case_id IS NOT NULL
+          WHERE p.inpatient_case_id IS NOT NULL AND p.date >= ?::date
           UNION ALL
-          SELECT pa.owner_id, p.amount
+          SELECT pa.owner_id, p.amount, 1
           FROM payments p JOIN boarding_sessions bs ON bs.id = p.boarding_id JOIN patients pa ON pa.id = bs.patient_id
-          WHERE p.boarding_id IS NOT NULL
+          WHERE p.boarding_id IS NOT NULL AND p.date >= ?::date
+          UNION ALL
+          -- Retail, but only where a customer was identified at the till.
+          SELECT s.owner_id, s.total, 1
+          FROM sales s WHERE s.owner_id IS NOT NULL AND s.sale_date >= ?
+          UNION ALL
+          -- Money back out. Not counted as a payment, so payment_count stays
+          -- a count of visits paid for rather than going negative.
+          SELECT pa.owner_id, -r.amount, 0
+          FROM refunds r JOIN visits v ON v.id = r.visit_id JOIN patients pa ON pa.id = v.patient_id
+          WHERE r.visit_id IS NOT NULL AND r.refund_date >= ?::date
+          UNION ALL
+          SELECT pa.owner_id, -r.amount, 0
+          FROM refunds r JOIN inpatient_cases ic ON ic.id = r.inpatient_case_id JOIN patients pa ON pa.id = ic.patient_id
+          WHERE r.inpatient_case_id IS NOT NULL AND r.refund_date >= ?::date
+          UNION ALL
+          SELECT pa.owner_id, -r.amount, 0
+          FROM refunds r JOIN boarding_sessions bs ON bs.id = r.boarding_id JOIN patients pa ON pa.id = bs.patient_id
+          WHERE r.boarding_id IS NOT NULL AND r.refund_date >= ?::date
+          UNION ALL
+          SELECT s.owner_id, -r.amount, 0
+          FROM refunds r JOIN sales s ON s.id = r.sale_id
+          WHERE s.owner_id IS NOT NULL AND r.refund_date >= ?::date
         )
-        SELECT o.id, o.name, COUNT(*) AS payment_count, SUM(op.amount) AS total_paid
-        FROM owner_payments op JOIN owners o ON o.id = op.owner_id
-        GROUP BY o.id, o.name
+        SELECT o.id, o.name, o.is_member, o.member_expires_on,
+               SUM(oa.payments) AS payment_count, SUM(oa.amount) AS total_paid
+        FROM owner_amounts oa JOIN owners o ON o.id = oa.owner_id
+        GROUP BY o.id, o.name, o.is_member, o.member_expires_on
         ORDER BY total_paid DESC
-        """
+        """,
+        (cutoff,) * 8,
     ).fetchall()
     active = [{"id": r["id"], "name": r["name"], "payment_count": r["payment_count"],
+               "is_member": is_active_member(r),
                "total_paid": round(r["total_paid"] or 0, 2)} for r in rows]
     avg_spend = round(sum(r["total_paid"] for r in active) / len(active), 2) if active else 0
     return active[:limit], avg_spend, len(active)
@@ -1697,8 +2024,10 @@ def refundable_sale_items(db, sale_id):
     discount_percent applied) — not today's Price List price. pos_checkout()
     only applies discount_percent once, to the sale's aggregate total, so
     sale_items.unit_price alone overstates what was paid on any discounted
-    sale; the same percentage applies uniformly to every line (there's no
-    per-line discount) so it's applied the same way here.
+    sale. The rate is applied per line against that line's own `discountable`
+    snapshot: a staff discount always covers every line (the guard refuses
+    the sale otherwise), but a MEMBER's sale can mix discounted and
+    full-price lines.
     `remaining` = quantity minus whatever's already been refunded against
     that exact sale_items row across every prior refund. This is what
     refund_retail_save() uses both to render the refund pick list and,
@@ -1709,7 +2038,7 @@ def refundable_sale_items(db, sale_id):
         return None, []
     discount_percent = sale["discount_percent"] or 0
     rows = db.execute(
-        "SELECT si.id AS sale_item_id, si.item_id, il.name, si.quantity, si.unit_price, "
+        "SELECT si.id AS sale_item_id, si.item_id, il.name, si.quantity, si.unit_price, si.discountable, "
         "COALESCE((SELECT SUM(ri.quantity) FROM refund_items ri WHERE ri.sale_item_id = si.id), 0) AS already_refunded "
         "FROM sale_items si JOIN inventory_list il ON il.id = si.item_id "
         "WHERE si.sale_id=? ORDER BY si.id",
@@ -1718,7 +2047,14 @@ def refundable_sale_items(db, sale_id):
     lines = []
     for r in rows:
         remaining = round(r["quantity"] - r["already_refunded"], 6)
-        unit_price = round(r["unit_price"] * (1 - discount_percent / 100), 2)
+        # Per line, from the snapshot taken at checkout. A member's sale can
+        # hold both discounted and full-price lines, so refunding every line
+        # at the discounted rate would underpay a returned full-price item,
+        # and refunding every line at full price would overpay a discounted
+        # one. On a staff discount every line is discountable, so this stays
+        # exactly the old uniform behaviour.
+        line_discount = discount_percent if r["discountable"] else 0
+        unit_price = round(r["unit_price"] * (1 - line_discount / 100), 2)
         lines.append({
             "sale_item_id": r["sale_item_id"], "item_id": r["item_id"], "name": r["name"],
             "unit_price": unit_price, "quantity": r["quantity"],

@@ -41,17 +41,25 @@ def api_inventory_lookup():
             return jsonify(None)
         price = logic.item_sale_price(db, row["id"])
         status = logic.inventory_status_by_id(db, row["id"])
+        # The POS live preview discounts per line for a member, so it needs
+        # each item's eligibility. BOTH branches of this endpoint return it --
+        # the barcode scan below and the name search above are separate paths
+        # into the same cart.
+        discountable = logic.discountable_by_item_ids(db, [row["id"]]).get(row["id"], False)
         return jsonify({"id": row["id"], "name": row["name"], "price": price,
-                        "stock": status["current_stock"] if status else None})
+                        "stock": status["current_stock"] if status else None,
+                        "discountable": discountable})
     if q:
         rows = db.execute("SELECT id, name FROM inventory_list WHERE active=true AND category='Retail' AND name ILIKE ? LIMIT 10",
                           (logic.like_pattern(q),)).fetchall()
         out = []
+        discountable_by_item = logic.discountable_by_item_ids(db, [r["id"] for r in rows])
         for r in rows:
             price = logic.item_sale_price(db, r["id"])
             status = logic.inventory_status_by_id(db, r["id"])
             out.append({"id": r["id"], "name": r["name"], "price": price,
-                        "stock": status["current_stock"] if status else None})
+                        "stock": status["current_stock"] if status else None,
+                        "discountable": discountable_by_item.get(r["id"], False)})
         return jsonify(out)
     return jsonify([])
 
