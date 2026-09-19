@@ -44,7 +44,7 @@
         </div>
         <div class="field dismissal-only"><label for="dismissalDate">{{ _('Dismissal Date') }}</label><input type="date" name="dismissal_date" id="dismissalDate" value="{{ fv(form, 'dismissal_date', case.dismissal_date or '') }}"></div>
       </div>
-      <div class="form-actions"><button class="btn" type="submit">{{ _('Save') }}</button></div>
+      <div class="form-actions form-actions-end"><button class="btn" type="submit">{{ _('Save') }}</button></div>
     </form>
   </div>
 </div>
@@ -54,7 +54,7 @@
     <form method="post" action="{{ url_for('clinical.inpatient_update_add', case_id=case.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field full"><label for="inpatientdetail-8-note">{{ _('Add a Daily Update — Condition of the Patient') }}</label><textarea id="inpatientdetail-8-note" name="note" required></textarea></div>
-      <div class="form-actions"><button class="btn small" type="submit">{{ _('Log Update') }}</button></div>
+      <div class="form-actions form-actions-end"><button class="btn small" type="submit">{{ _('Log Update') }}</button></div>
     </form>
   </div>
   <div class="section-title">{{ _('Last 3 Days') }}</div>
@@ -70,7 +70,7 @@
     <form method="post" action="{{ url_for('clinical.inpatient_update_edit', case_id=case.id, update_id=u.id) }}" class="update-edit-form" style="display:none; margin-top:10px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <textarea name="note" required>{{ u.note }}</textarea>
-      <div class="form-actions"><button class="btn small" type="submit">{{ _('Save') }}</button></div>
+      <div class="form-actions form-actions-end"><button class="btn small" type="submit">{{ _('Save') }}</button></div>
     </form>
   </div>
   {% else %}<div class="empty-note">{{ _('No updates logged yet.') }}</div>{% endfor %}
@@ -94,7 +94,7 @@
         <form method="post" action="{{ url_for('clinical.inpatient_update_edit', case_id=case.id, update_id=u.id) }}" class="update-edit-form" style="display:none; margin-top:10px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <textarea name="note" required>{{ u.note }}</textarea>
-          <div class="form-actions"><button class="btn small" type="submit">{{ _('Save') }}</button></div>
+          <div class="form-actions form-actions-end"><button class="btn small" type="submit">{{ _('Save') }}</button></div>
         </form>
       </div>
       {% endfor %}
@@ -113,7 +113,7 @@
         </div>
         <div class="field full"><label for="inpatientdetail-10-notes">{{ _('Notes') }}</label><input id="inpatientdetail-10-notes" name="notes"></div>
       </div>
-      <div class="form-actions"><button class="btn small" type="submit">{{ _('Log Contact Attempt') }}</button></div>
+      <div class="form-actions form-actions-end"><button class="btn small" type="submit">{{ _('Log Contact Attempt') }}</button></div>
     </form>
   </div>
   <div class="section-title">{{ _('Last 3 Days') }}</div>
@@ -139,7 +139,7 @@
         <div id="inpatientBillCart" style="margin-top:10px;"></div>
         <div id="inpatientBillFieldsHidden"></div>
       </div>
-      <div class="form-actions"><button class="btn small" type="submit" data-vzh="inpatient-detail-9">{{ _('Add to Bill') }}</button></div>
+      <div class="form-actions form-actions-end"><button class="btn small" type="submit" data-vzh="inpatient-detail-9">{{ _('Add to Bill') }}</button></div>
     </form>
   </div>
 
@@ -202,7 +202,7 @@
       </span>
     </div>
     {% else %}<div class="empty-note">{{ _('No files uploaded yet.') }}</div>{% endfor %}
-    <form method="post" action="{{ url_for('clinical.inpatient_attachment_upload', case_id=case.id) }}" enctype="multipart/form-data" style="margin-top:10px; display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
+    <form method="post" action="{{ url_for('clinical.inpatient_attachment_upload', case_id=case.id) }}" enctype="multipart/form-data" class="inpatient-upload-row">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="file" name="file" accept=".pdf,.jpg,.jpeg" required>
       <button class="btn small" type="submit">{{ _('Upload') }}</button>
